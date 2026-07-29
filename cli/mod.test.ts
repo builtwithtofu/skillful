@@ -28,7 +28,9 @@ describe("skill.mod", () => {
     const mod = parseMod(full, "skill.mod");
     expect(mod.roots).toEqual({ skills: "./my-skills", commands: "./my commands", rules: "./rules.md" });
     expect(mod.requires[0]).toMatchObject({ ref: "github:owner/repo@main", alias: "demo", mode: "only", selectors: ["zebra", "alpha"] });
-    expect(mod.harnesses.pi.tokens.audience).toBe("Pi 🤖");
+    const pi = mod.harnesses.pi;
+    if (!pi) throw new Error("expected the parsed pi harness");
+    expect(pi.tokens.audience).toBe("Pi 🤖");
     expect(mod.leadingComments).toHaveLength(4);
   });
 

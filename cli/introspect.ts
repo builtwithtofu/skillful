@@ -15,7 +15,7 @@ function publicSkill(skill: ReturnType<typeof resolvePlan>["harnesses"][HarnessI
   const supportFiles = value.supportFiles.map(({ sourcePath: _sourcePath, relativePath: _relativePath, ...support }) => support);
   return rendered ? { ...value, supportFiles } : { ...value, supportFiles, body: undefined, command: { ...value.command, body: undefined } };
 }
-export function manifestCommand(project: Project, options: ResolveOptions & { harnesses?: HarnessId[]; format: OutputFormat }) {
+export function manifestCommand(project: Project, options: ResolveOptions & { harnesses?: HarnessId[] | undefined; format: OutputFormat }) {
   const plan = resolvePlan(project, options);
   const contract = contractFor(plan);
   const ids = selectedHarnesses(plan, options.harnesses);
@@ -26,7 +26,14 @@ export function schemaCommand(project: Project, options: ResolveOptions & { form
   const schema = contractFor(resolvePlan(project, options)).schema;
   emit({ schemaVersion: 1, schema }, options.format, () => ["schemaVersion: 1", `harnesses: ${Object.keys(schema.harnesses).join(", ")}`, `markup: ${schema.markup.join(", ")}`].join("\n"));
 }
-export function listCommand(project: Project, selector: "skills" | "harnesses", options: ResolveOptions & { harnesses?: HarnessId[]; format: OutputFormat }) {
+type ListedSkill = { status: "included"; origin: string } | { status: "omitted"; reason: string } | { status: "absent" };
+function listedSkillEntry(plan: ReturnType<typeof resolvePlan>, id: HarnessId, name: string): readonly [HarnessId, ListedSkill] {
+  const skill = plan.harnesses[id].skills.find((entry) => entry.name === name);
+  if (skill) return [id, { status: "included", origin: skill.origin }];
+  const omission = plan.harnesses[id].omittedSkills[name];
+  return [id, omission ? { status: "omitted", reason: omission.message } : { status: "absent" }];
+}
+export function listCommand(project: Project, selector: "skills" | "harnesses", options: ResolveOptions & { harnesses?: HarnessId[] | undefined; format: OutputFormat }) {
   const plan = resolvePlan(project, options);
   const ids = selectedHarnesses(plan, options.harnesses);
   if (selector === "harnesses") {
@@ -35,28 +42,37 @@ export function listCommand(project: Project, selector: "skills" | "harnesses", 
     return;
   }
   const names = [...new Set(ids.flatMap((id) => plan.harnesses[id].skills.map((skill) => skill.name)))].sort();
-  const rows = names.map((name) => ({ name, harnesses: Object.fromEntries(ids.map((id) => {
-    const skill = plan.harnesses[id].skills.find((entry) => entry.name === name);
-    const omission = plan.harnesses[id].omittedSkills[name];
-    return [id, skill ? { status: "included", origin: skill.origin } : omission ? { status: "omitted", reason: omission.message } : { status: "absent" }];
-  })) }));
-  emit({ schemaVersion: 1, skills: rows }, options.format, () => rows.map((row) => `${row.name}\t${ids.map((id) => `${id}:${row.harnesses[id]!.status}`).join(" ")}`).join("\n"));
+  const rows = names.map((name) => {
+    const entries = ids.map((id) => listedSkillEntry(plan, id, name));
+    return {
+      value: { name, harnesses: Object.fromEntries(entries) },
+      text: `${name}\t${entries.map(([id, entry]) => `${id}:${entry.status}`).join(" ")}`,
+    };
+  });
+  emit({ schemaVersion: 1, skills: rows.map((row) => row.value) }, options.format, () => rows.map((row) => row.text).join("\n"));
 }
-export function inspectCommand(project: Project, name: string, options: ResolveOptions & { harnesses?: HarnessId[]; rendered?: boolean; format: OutputFormat }) {
+type Inspection =
+  | { status: "included"; skill: ReturnType<typeof publicSkill> }
+  | { status: "omitted"; omission: { code: string; message: string } }
+  | { status: "absent" };
+function inspectionEntry(plan: ReturnType<typeof resolvePlan>, id: HarnessId, name: string, rendered: boolean): readonly [HarnessId, Inspection] {
+  const skill = plan.harnesses[id].skills.find((entry) => entry.name === name);
+  if (skill) return [id, { status: "included", skill: publicSkill(skill, rendered) }];
+  const omission = plan.harnesses[id].omittedSkills[name];
+  return [id, omission ? { status: "omitted", omission } : { status: "absent" }];
+}
+export function inspectCommand(project: Project, name: string, options: ResolveOptions & { harnesses?: HarnessId[] | undefined; rendered?: boolean | undefined; format: OutputFormat }) {
   const plan = resolvePlan(project, options);
   const ids = selectedHarnesses(plan, options.harnesses);
-  const harnesses = Object.fromEntries(ids.map((id) => {
-    const skill = plan.harnesses[id].skills.find((entry) => entry.name === name);
-    return [id, skill ? { status: "included", skill: publicSkill(skill, Boolean(options.rendered)) } : plan.harnesses[id].omittedSkills[name] ? { status: "omitted", omission: plan.harnesses[id].omittedSkills[name] } : { status: "absent" }];
-  }));
-  if (Object.values(harnesses).every((entry) => entry.status === "absent")) fail(`unknown skill: ${name}`, "Run `skillful list skills` to see available selectors.");
-  emit({ schemaVersion: 1, name, harnesses }, options.format, () => ids.map((id) => {
-    const entry = harnesses[id]!;
+  const entries = ids.map((id) => inspectionEntry(plan, id, name, Boolean(options.rendered)));
+  const harnesses = Object.fromEntries(entries);
+  if (entries.every(([, entry]) => entry.status === "absent")) fail(`unknown skill: ${name}`, "Run `skillful list skills` to see available selectors.");
+  emit({ schemaVersion: 1, name, harnesses }, options.format, () => entries.map(([id, entry]) => {
     if (entry.status !== "included") return `${id}: ${entry.status}`;
     return `${id}: included (${entry.skill.origin})${options.rendered ? `\n${entry.skill.body}` : ""}`;
   }).join("\n\n"));
 }
-export function checkCommand(project: Project, names: string[], options: ResolveOptions & { harnesses?: HarnessId[]; strict?: boolean; format: OutputFormat }) {
+export function checkCommand(project: Project, names: string[], options: ResolveOptions & { harnesses?: HarnessId[] | undefined; strict?: boolean | undefined; format: OutputFormat }) {
   const plan = resolvePlan(project, options);
   const ids = selectedHarnesses(plan, options.harnesses);
   const known = new Set(ids.flatMap((id) => plan.harnesses[id].skills.map((skill) => skill.name)));
@@ -102,7 +118,7 @@ function lineDiff(before: string, after: string) {
   const left = before.split("\n"); const right = after.split("\n");
   return ["--- before", "+++ after", ...left.map((line) => `-${line}`), ...right.map((line) => `+${line}`)].join("\n");
 }
-export function diffCommand(project: Project, name: string, options: ResolveOptions & { against?: string; harnesses?: HarnessId[]; format: OutputFormat }) {
+export function diffCommand(project: Project, name: string, options: ResolveOptions & { against?: string | undefined; harnesses?: HarnessId[] | undefined; format: OutputFormat }) {
   const current = resolvePlan(project, options);
   const ids = selectedHarnesses(current, options.harnesses);
   let historical: ReturnType<typeof historicalProject> | undefined;

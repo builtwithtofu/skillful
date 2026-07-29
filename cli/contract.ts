@@ -2,14 +2,14 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { loadHarnesses, type HarnessFacts } from "./harness.ts";
-import type { HarnessId, Omission, Require } from "./mod.ts";
-import { ProjectError, resolveProjectPath, type Project } from "./project.ts";
+import { mapHarnesses, type HarnessId, type Omission, type Require } from "./mod.ts";
+import { resolveProjectPath, type Project } from "./project.ts";
 import { cachedDependencyPaths } from "./deps.ts";
 
 export type ExtraRoot = { origin: string; path: string };
 export type ResolveOptions = {
-  overrides?: Record<string, string>;
-  extraRoots?: { skills?: ExtraRoot[]; commands?: ExtraRoot[] };
+  overrides?: Record<string, string> | undefined;
+  extraRoots?: { skills?: ExtraRoot[] | undefined; commands?: ExtraRoot[] | undefined } | undefined;
 };
 
 type Source = { kind: string; origin?: string | null; path: string | null };
@@ -415,7 +415,7 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, entr
 export function resolvePlan(project: Project, options: ResolveOptions = {}): ProjectPlan {
   const facts = loadHarnesses();
   const entries = resolveEntries(project, { ...options, overrides: cachedDependencyPaths(project, options.overrides) });
-  return { project, harnesses: Object.fromEntries(Object.entries(facts).map(([id, value]) => [id, buildHarness(project, id as HarnessId, value, entries)])) as Record<HarnessId, HarnessPlan> };
+  return { project, harnesses: mapHarnesses((id) => buildHarness(project, id, facts[id], entries)) };
 }
 export function contractFor(plan: ProjectPlan) {
   const facts = loadHarnesses();
@@ -423,10 +423,16 @@ export function contractFor(plan: ProjectPlan) {
     schemaVersion: 1,
     schema: {
       markup: ["{{token}}", "{{#harness}}", "{{^harness}}", "{{/}}", "$@"],
-      harnesses: Object.fromEntries(Object.entries(facts).map(([id, value]) => [id, { argSyntax: value.argSyntax, tokens: plan.project.mod.harnesses[id]?.tokens ?? {}, skillFrontmatter: value.skillFrontmatter, commandFrontmatter: value.commandFrontmatter, commandMerge: value.commandMerge }])),
+      harnesses: mapHarnesses((id) => {
+        const value = facts[id];
+        return { argSyntax: value.argSyntax, tokens: plan.project.mod.harnesses[id]?.tokens ?? {}, skillFrontmatter: value.skillFrontmatter, commandFrontmatter: value.commandFrontmatter, commandMerge: value.commandMerge };
+      }),
     },
     manifest: {
-      harnesses: Object.fromEntries(Object.entries(plan.harnesses).map(([id, harness]) => [id, { profile: harness.profile, skills: harness.skills.map(publicSkill), omittedSkills: harness.omittedSkills, commands: harness.commands, rules: { source: harness.rules.source, delivery: harness.rules.delivery, sha256: harness.rules.sha256 }, assets: [] }])),
+      harnesses: mapHarnesses((id) => {
+        const harness = plan.harnesses[id];
+        return { profile: harness.profile, skills: harness.skills.map(publicSkill), omittedSkills: harness.omittedSkills, commands: harness.commands, rules: { source: harness.rules.source, delivery: harness.rules.delivery, sha256: harness.rules.sha256 }, assets: [] };
+      }),
     },
   };
 }

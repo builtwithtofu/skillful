@@ -22,7 +22,7 @@ import type { Project } from "./project.ts";
 import { renderProject } from "./render.ts";
 import { loadHarnesses } from "./harness.ts";
 
-export type InstallOptions = ResolveOptions & { harness: HarnessId; root?: string; dryRun?: boolean; force?: boolean; stateHome?: string };
+export type InstallOptions = ResolveOptions & { harness: HarnessId; root?: string | undefined; dryRun?: boolean | undefined; force?: boolean | undefined; stateHome?: string | undefined };
 export type InstallChange = { path: string; action: "add" | "change" | "delete" };
 export type InstallResult = { root: string; statePath: string; changes: InstallChange[]; dryRun: boolean };
 type InstallState = { schemaVersion: 1; projectRoot: string; projectId: string; harness: HarnessId; destinationRoot: string; rootId: string; files: Record<string, string> };

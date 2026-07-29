@@ -34,7 +34,7 @@ function portableTree(root: string, prefix = ""): string[] {
     .sort();
 }
 
-export function discoverProject({ cwd = process.cwd(), project }: { cwd?: string; project?: string } = {}): Project {
+export function discoverProject({ cwd = process.cwd(), project }: { cwd?: string | undefined; project?: string | undefined } = {}): Project {
   let root: string;
   if (project) {
     const selected = resolve(cwd, project);

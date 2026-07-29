@@ -1,13 +1,21 @@
 export const HARNESS_IDS = ["claude", "pi", "opencode", "opencode-v2"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
+export function mapHarnesses<T>(value: (id: HarnessId) => T): Record<HarnessId, T> {
+  return {
+    claude: value("claude"),
+    opencode: value("opencode"),
+    "opencode-v2": value("opencode-v2"),
+    pi: value("pi"),
+  };
+}
 
 type Comments = string[];
 type WithComments<T> = T & { comments: Comments };
 export type Require = WithComments<{
   ref: string;
-  alias?: string;
+  alias: string | undefined;
   name: string;
-  mode?: "only" | "exclude";
+  mode: "only" | "exclude" | undefined;
   selectors: string[];
 }>;
 export type Omission = WithComments<{ kind: "omit-skill" | "omit-command"; selector: string; reason: string }>;
@@ -24,7 +32,7 @@ export type SkillMod = {
   requires: Require[];
   harnesses: Record<string, Harness>;
   /** Compatibility view for callers that only need comment accounting. */
-  leadingComments: Comments[];
+  leadingComments: Comments;
 };
 
 export class ModError extends Error {

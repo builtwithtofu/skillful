@@ -17,10 +17,10 @@ import type { HarnessId } from "./mod.ts";
 import type { Project } from "./project.ts";
 
 export type RenderOptions = ResolveOptions & {
-  harnesses?: HarnessId[];
-  out?: string;
-  dryRun?: boolean;
-  force?: boolean;
+  harnesses?: HarnessId[] | undefined;
+  out?: string | undefined;
+  dryRun?: boolean | undefined;
+  force?: boolean | undefined;
 };
 export type RenderChange = { path: string; action: "add" | "change" | "delete" };
 export type RenderResult = { out: string; changes: RenderChange[]; dryRun: boolean };

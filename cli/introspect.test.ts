@@ -24,6 +24,10 @@ describe("top-level introspection", () => {
     expect(listed.exitCode).toBe(0);
     expect(json(listed).skills.map((skill: { name: string }) => skill.name)).toContain("example");
 
+    const listedHarnesses = run(project, "list", "harnesses");
+    expect(listedHarnesses.exitCode).toBe(0);
+    expect(stdout(listedHarnesses)).toBe("claude\nopencode\nopencode-v2\npi\n");
+
     const inspected = run(project, "inspect", "example", "--harness", "pi", "--rendered", "--format", "json");
     expect(inspected.exitCode).toBe(0);
     expect(json(inspected).harnesses.pi.skill.body).toContain("This resource is rendered for Pi");

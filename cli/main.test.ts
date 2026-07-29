@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cacheKey } from "./nar.ts";
 
 const dirs: string[] = [];
 const temp = () => { const dir = join(tmpdir(), `skillful-main-${crypto.randomUUID()}`); mkdirSync(dir); dirs.push(dir); return dir; };
@@ -36,5 +37,29 @@ describe("project CLI", () => {
     const result = run(root, "fmt", "--harness", "pi");
     expect(result.exitCode).toBe(2);
     expect(output(result).stderr).toContain("unknown option");
+  });
+
+  test.skipIf(process.platform === "win32")("runtime failures without a recovery hint remain structured JSON errors", () => {
+    const root = temp();
+    const project = join(root, "project");
+    const cache = join(root, "cache");
+    cpSync(join(import.meta.dir, "..", "tests", "fixtures", "locked-project"), project, { recursive: true });
+    const hash = readFileSync(join(project, "skill.lock"), "utf8").match(/sha256-[A-Za-z0-9+/]{43}=/)?.[0];
+    if (!hash) throw new Error("locked fixture lost its NAR hash");
+    const cacheEntry = join(cache, "skillful", cacheKey(hash));
+    mkdirSync(cacheEntry, { recursive: true });
+    const unsupported = join(cacheEntry, "unsupported");
+    const fifo = Bun.spawnSync(["mkfifo", unsupported], { stdout: "pipe", stderr: "pipe" });
+    if (fifo.exitCode !== 0) throw new Error(`cannot create FIFO fixture: ${new TextDecoder().decode(fifo.stderr)}`);
+
+    const result = Bun.spawnSync(["bun", join(import.meta.dir, "main.ts"), "manifest", "--project", project, "--format", "json"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, XDG_CACHE_HOME: cache },
+    });
+    const actual = output(result);
+    expect(result.exitCode).toBe(1);
+    expect(actual.stdout).toBe(`${JSON.stringify({ schemaVersion: 1, error: { code: "runtime", message: `unsupported filesystem kind for NAR: ${unsupported}`, hint: "Run `skillful --help` for supported commands." } })}\n`);
+    expect(actual.stderr).toBe("");
   });
 });

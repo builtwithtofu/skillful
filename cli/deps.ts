@@ -3,13 +3,13 @@ import { homedir, tmpdir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { cacheKey, narHash } from "./nar.ts";
-import { formatLock, readLock, validateLock, writeLockAtomic, type LockEntry } from "./lock.ts";
+import { readLock, validateLock, writeLockAtomic, type LockEntry } from "./lock.ts";
 import { formatMod, type Require, type SkillMod } from "./mod.ts";
 import type { Project } from "./project.ts";
 
 export type ParsedRef =
-  | { type: "github"; ref: string; identity: string; owner: string; repo: string; subdir?: string; version: string }
-  | { type: "git"; ref: string; identity: string; url: string; subdir?: string; version: string }
+  | { type: "github"; ref: string; identity: string; owner: string; repo: string; subdir: string | undefined; version: string }
+  | { type: "git"; ref: string; identity: string; url: string; subdir: string | undefined; version: string }
   | { type: "path"; ref: string; identity: string; path: string };
 export class DependencyError extends Error { constructor(message: string, readonly recovery: string) { super(message); } }
 function fail(message: string, recovery: string): never { throw new DependencyError(message, `Recovery: ${recovery}`); }
@@ -195,7 +195,7 @@ function transactionalWrite(project: Project, mod: SkillMod, entries: LockEntry[
     throw cause;
   }
 }
-export async function addDependency(project: Project, ref: string, options: { name?: string; only?: string[]; exclude?: string[]; cache?: string } = {}) {
+export async function addDependency(project: Project, ref: string, options: { name?: string | undefined; only?: string[] | undefined; exclude?: string[] | undefined; cache?: string | undefined } = {}) {
   const parsed = parseRef(ref);
   if (options.only?.length && options.exclude?.length) fail("add cannot mix --only and --exclude", "Choose one selector mode.");
   const alias = options.name;

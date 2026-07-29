@@ -1,16 +1,13 @@
 #!/usr/bin/env bun
 import { readFileSync, writeFileSync } from "node:fs";
 import { Argument, Command, CommanderError, Option } from "commander";
-import { ContractError } from "./contract.ts";
-import { addDependency, DependencyError, fetchDependencies, updateDependencies } from "./deps.ts";
-import { HarnessError, normalizeHarness } from "./harness.ts";
-import { installProject, InstallError } from "./install.ts";
-import { checkCommand, diffCommand, inspectCommand, IntrospectionError, listCommand, manifestCommand, schemaCommand, type OutputFormat } from "./introspect.ts";
-import { LockError } from "./lock.ts";
-import { NarError } from "./nar.ts";
-import { formatText, ModError, type HarnessId } from "./mod.ts";
-import { discoverProject, initProject, ProjectError } from "./project.ts";
-import { renderProject, RenderOutputError } from "./render.ts";
+import { addDependency, fetchDependencies, updateDependencies } from "./deps.ts";
+import { normalizeHarness } from "./harness.ts";
+import { installProject } from "./install.ts";
+import { checkCommand, diffCommand, inspectCommand, listCommand, manifestCommand, schemaCommand, type OutputFormat } from "./introspect.ts";
+import { formatText, type HarnessId } from "./mod.ts";
+import { discoverProject, initProject } from "./project.ts";
+import { renderProject } from "./render.ts";
 
 const collect = (value: string, previous: string[] = []) => [...previous, value];
 function one(values: string[] | undefined, flag: string) {
@@ -51,9 +48,11 @@ function printChanges(verb: string, target: string, changes: Array<{ action: "ad
 }
 
 class CliUsageError extends Error { constructor(message: string, readonly recovery: string) { super(message); } }
+function hasRecovery(error: unknown): error is Error & { recovery: string } {
+  return error instanceof Error && "recovery" in error && typeof error.recovery === "string";
+}
 function recoveryFor(error: unknown) {
-  if (error instanceof CliUsageError || error instanceof ProjectError || error instanceof ModError || error instanceof ContractError || error instanceof RenderOutputError || error instanceof InstallError || error instanceof IntrospectionError || error instanceof DependencyError || error instanceof LockError || error instanceof NarError || error instanceof HarnessError) return error.recovery;
-  return "Run `skillful --help` for supported commands.";
+  return hasRecovery(error) ? error.recovery : "Run `skillful --help` for supported commands.";
 }
 function printDomainError(error: unknown, json = false) {
   const message = error instanceof Error ? error.message : String(error);
@@ -73,7 +72,15 @@ function addSourceOptions(command: Command, withHarness = true) {
   command.addOption(internalRootOption("--extra-command-root <origin=path>", "internal named command root"));
   return command;
 }
-function sourceArguments(options: { project: string[]; harness?: string[]; format: OutputFormat; override: string[]; extraSkillRoot: string[]; extraCommandRoot: string[] }) {
+type SourceOptionValues = {
+  project: string[];
+  harness?: string[] | undefined;
+  format: OutputFormat;
+  override: string[];
+  extraSkillRoot: string[];
+  extraCommandRoot: string[];
+};
+function sourceArguments(options: SourceOptionValues) {
   return {
     project: discoverProject({ project: one(options.project, "--project") }),
     harnesses: options.harness ? harnesses(options.harness) : undefined,
@@ -197,25 +204,25 @@ export function createProgram() {
     });
 
   addSourceOptions(program.command("list").description("List delivered skills or public harnesses").addArgument(new Argument("<selector>", "skills or harnesses").choices(["skills", "harnesses"])))
-    .action((selector: "skills" | "harnesses", options) => { const source = sourceArguments(options); listCommand(source.project, selector, source); });
+    .action((selector: "skills" | "harnesses", options: SourceOptionValues) => { const source = sourceArguments(options); listCommand(source.project, selector, source); });
 
   addSourceOptions(program.command("inspect").description("Explain one skill across harnesses").argument("<skill>", "skill selector"))
     .option("--rendered", "include rendered bodies")
-    .action((name: string, options) => { const source = sourceArguments(options); inspectCommand(source.project, name, { ...source, rendered: options.rendered }); });
+    .action((name: string, options: SourceOptionValues & { rendered?: boolean | undefined }) => { const source = sourceArguments(options); inspectCommand(source.project, name, { ...source, rendered: options.rendered }); });
 
   addSourceOptions(program.command("check").description("Validate the resolved project").argument("[skills...]", "optional skill selectors"))
     .option("--strict", "promote warnings to failure")
-    .action((names: string[], options) => { const source = sourceArguments(options); checkCommand(source.project, names, { ...source, strict: options.strict }); });
+    .action((names: string[], options: SourceOptionValues & { strict?: boolean | undefined }) => { const source = sourceArguments(options); checkCommand(source.project, names, { ...source, strict: options.strict }); });
 
   addSourceOptions(program.command("diff").description("Compare one skill across harnesses or with a local revision").argument("<skill>", "skill selector"))
     .addOption(new Option("--against <revision>", "local Git revision").argParser(collect).default([]))
-    .action((name: string, options) => { const source = sourceArguments(options); diffCommand(source.project, name, { ...source, against: one(options.against, "--against") }); });
+    .action((name: string, options: SourceOptionValues & { against: string[] }) => { const source = sourceArguments(options); diffCommand(source.project, name, { ...source, against: one(options.against, "--against") }); });
 
   addSourceOptions(program.command("manifest").description("Emit the resolved schemaVersion-1 manifest"))
-    .action((options) => { const source = sourceArguments(options); manifestCommand(source.project, source); });
+    .action((options: SourceOptionValues) => { const source = sourceArguments(options); manifestCommand(source.project, source); });
 
   addSourceOptions(program.command("schema").description("Describe harness facts and renderer markup"), false)
-    .action((options) => { const source = sourceArguments(options); schemaCommand(source.project, source); });
+    .action((options: SourceOptionValues) => { const source = sourceArguments(options); schemaCommand(source.project, source); });
   return program;
 }
 
