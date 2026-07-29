@@ -1,0 +1,8 @@
+{
+  "name": "opencode",
+  "installPaths": { "skills": ".config/opencode/skills", "commands": ".config/opencode/command", "rules": ".config/opencode/AGENTS.md" },
+  "argSyntax": "$ARGUMENTS",
+  "skillFrontmatter": ["name", "description", "license", "compatibility", "metadata"],
+  "commandFrontmatter": ["description"],
+  "commandMerge": "file"
+}
