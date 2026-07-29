@@ -1,0 +1,28 @@
+{
+  "name": "@aledsdavies/skillful",
+  "version": "0.1.0",
+  "description": "Author agent skills once, render them per harness",
+  "type": "module",
+  "files": [
+    "cli",
+    "harnesses",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bun build --compile cli/main.ts --outfile dist/skillful",
+    "test": "bun test cli"
+  },
+  "dependencies": {
+    "commander": "14.0.3"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aledsdavies/skillful.git"
+  }
+}
