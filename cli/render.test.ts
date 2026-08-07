@@ -47,6 +47,37 @@ describe("TypeScript renderer", () => {
     expect(text(join(project, "rendered", "pi", "skills", "example", "references", "guide.md"))).toContain("copied without rendering");
   });
 
+  test("preserves multiline values of supported frontmatter fields", () => {
+    const { project } = fixture();
+    writeFileSync(join(project, "skills", "example", "SKILL.md"), `---
+name: example
+description: >-
+  Use this skill when the description
+  wraps across multiple lines.
+metadata:
+  owner: skillful
+unsupported:
+  nested: omitted
+---
+
+# Example
+`);
+
+    renderProject(discoverProject({ project }), { harnesses: ["pi"] });
+
+    const rendered = text(join(project, "rendered", "pi", "skills", "example", "SKILL.md"));
+    expect(rendered).toStartWith(`---
+name: example
+description: >-
+  Use this skill when the description
+  wraps across multiple lines.
+metadata:
+  owner: skillful
+---`);
+    expect(rendered).not.toContain("unsupported:");
+    expect(rendered).not.toContain("nested: omitted");
+  });
+
   test("rejects unresolved markup before touching an existing output", () => {
     const { project, resolved } = fixture();
     renderProject(resolved, { harnesses: ["pi"] });

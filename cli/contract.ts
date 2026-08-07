@@ -143,11 +143,12 @@ function frontmatterEnd(lines: string[]) {
   return null;
 }
 function keyOf(line: string) { return line.split(":", 1)[0] ?? ""; }
+function topLevelKeyOf(line: string) { return line.match(/^([A-Za-z0-9][A-Za-z0-9_-]*):/)?.[1] ?? null; }
 export function frontmatterKeys(text: string) {
   const lines = text.split("\n");
   const end = frontmatterEnd(lines);
   if (end === null) return [];
-  return lines.slice(1, end).filter((line) => /^[A-Za-z0-9][A-Za-z0-9_-]*:/.test(line)).map(keyOf);
+  return lines.slice(1, end).map(topLevelKeyOf).filter((key): key is string => key !== null);
 }
 function frontmatterValue(key: string, text: string) {
   const lines = text.split("\n");
@@ -171,7 +172,16 @@ function filterFrontmatter(text: string, allowed: string[]) {
   const lines = text.split("\n");
   const end = frontmatterEnd(lines);
   if (end === null) return text;
-  const kept = lines.slice(1, end).filter((line) => line === "" || line.startsWith("#") || allowed.includes(keyOf(line)));
+  let retainedField = false;
+  const kept = lines.slice(1, end).filter((line) => {
+    const key = topLevelKeyOf(line);
+    if (key !== null) {
+      retainedField = allowed.includes(key);
+      return retainedField;
+    }
+    if (line === "" || line.startsWith("#")) return true;
+    return /^\s/.test(line) && retainedField;
+  });
   return ["---", ...kept, "---", ...lines.slice(end + 1)].join("\n");
 }
 function frontmatterPlan(raw: string, rendered: string): FrontmatterPlan {
