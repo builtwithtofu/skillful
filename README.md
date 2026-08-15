@@ -2,62 +2,64 @@
 
 Author agent skills once, render them per harness.
 
-Skillful is a standalone executable authored in TypeScript and compiled by Bun, with a thin Nix
-integration. A project owns `skill.mod`, optional `skill.lock`, and its skills, commands, and rules.
-The same TypeScript plan drives inspection, rendering, installation, and sandboxed Nix builds.
+You write skills, commands, and rules in one project. Skillful renders that
+corpus for each harness: `claude`, `pi`, `opencode`, `opencode-v2`. Other
+people's trees come in through Git (`github:`, `git:`, `path:`).
 
-## Try it
+Plain files are enough for a single harness. Use skillful when one tree must
+serve several harnesses, or when you compose another tree with your own.
+
+The CLI is the product. A project is `skill.mod`, optional `skill.lock`, and
+the files under `skills/`, `commands/`, and `rules/`. One `SKILL.md` is
+rewritten per harness: tokens from `skill.mod`, harness fences, argument
+syntax, and the frontmatter that harness accepts. Only `install` writes live
+destinations.
+
+Nix is the other way to run the same project. It consumes the lock and the
+renderer so the tree is Nix-compatible from the first pin.
+
+## Install
+
+Build a standalone binary with Bun. The result does not need Bun, Node, or npm
+at runtime. Git-backed dependencies and historical diffs need Git. Remote
+extraction needs `tar`.
 
 ```sh
 bun install --frozen-lockfile
 bun run build
-./dist/skillful init --dir /tmp/my-skills
-cd /tmp/my-skills
-/path/to/skillful/dist/skillful list skills
-/path/to/skillful/dist/skillful render --dry-run
-/path/to/skillful/dist/skillful install --harness pi --dry-run
+./dist/skillful --help
 ```
 
-The resulting native executable embeds the harness facts and initial project scaffold. It does not
-need Bun, Node, or npm at runtime. Git-backed dependency operations and historical revision diffs
-require Git; remote dependency extraction requires `tar`.
+From a Nix flake, the same binary is `inputs.skillful.packages.${system}.skillful`.
 
-The fixed harness identifiers are `claude`, `pi`, `opencode`, and `opencode-v2`.
+## Use the CLI
 
-## User commands
-
-```text
-skillful init [--dir DIR]
-skillful fmt [--check] [--project DIR]
-skillful add <ref> [--name NAME] [--only SKILL]... [--exclude SKILL]...
-skillful fetch
-skillful update [name ...]
-skillful list skills|harnesses
-skillful inspect <skill> [--rendered]
-skillful check [<skill>...] [--strict]
-skillful diff <skill> [--against REV]
-skillful manifest
-skillful schema
-skillful render [--harness H] [--out DIR] [--dry-run] [--force]
-skillful install --harness H [--root DIR] [--dry-run] [--force]
+```sh
+skillful init --dir ./agent
+cd ./agent
+skillful add github:owner/repo@main --name alias --only skill-name
+skillful list skills
+skillful inspect skill-name
+skillful render --dry-run
+skillful install --harness pi --dry-run
 ```
 
-`render` writes a managed build tree. Only `install` writes harness destinations; it records
-ownership, refuses unmanaged or edited collisions, removes only unchanged stale files, and keeps
-installations into different roots independent.
+`skillful --help` orients. `skillful <command> --help` is the flag reference.
+For a job map, run `skillful skills tree`, then `skillful skills show <topic>`.
 
-Only `add` and `update` resolve revisions. `add` also fetches; `fetch` retrieves exact existing
-pins. Inspection, checks, rendering, installation, and historical diff never resolve or contact the
-network. `diff --against` materializes only a revision already present in the local Git object
-database.
+Only `add` and `update` resolve revisions. `fetch` retrieves exact pins.
+Inspection, check, render, and install never resolve.
 
-## Nix
+## Use Nix
+
+Nix reads `skill.lock`, fetches those exact pins with `fetchTree`, and runs
+`skillful render` with no network. No import-from-derivation.
 
 ```nix
 project = inputs.skillful.lib.mkProject {
   inherit pkgs;
   src = ./agent;
-  dependencyOverrides.agent-jj = pkgs.agent-jj.passthru.skillRoot;
+  dependencyOverrides.shared = pkgs.shared-skills;
   extraRoots.skills = [ { origin = "workstation"; src = ./host-skills; } ];
 };
 
@@ -65,16 +67,15 @@ pi = project.forHarness "pi";
 # pi = { installPaths; skills; commands; rules; }
 ```
 
-Nix reads only fixed harness JSON and `skill.lock` during evaluation. It fetches exact pins with
-`fetchTree`, supplies them as local overrides, and runs `skillful render` without network access.
-No import-from-derivation is required.
+`dependencyOverrides` satisfy a declared require from a local package.
+`extraRoots` add named host content without editing `skill.mod`.
 
 ## Development
 
 ```sh
 bun test cli
+bun run typecheck
 nix flake check path:.
 ```
 
-See [CLI](docs/cli.md), [skill.mod](docs/skill-mod.md), [dependencies](docs/dependencies.md),
-[rendering](docs/rendering.md), [commands](docs/commands.md), and [harnesses](docs/harnesses.md).
+See `skillful --help` and `skillful skills tree`.
