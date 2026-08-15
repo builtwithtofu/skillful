@@ -82,6 +82,7 @@ function printDomainError(error: unknown, json = false) {
 function internalRootOption(flags: string, description: string) { return new Option(flags, description).argParser(collect).hideHelp(); }
 function addSourceOptions(command: Command, withHarness = true) {
   command.addOption(new Option("--project <directory>", "project directory").argParser(collect));
+  command.addOption(internalRootOption("--source-root <directory>", "source workspace containing the project"));
   if (withHarness) command.addOption(new Option("--harness <harness>", "select a harness; repeatable").argParser(collect));
   command.addOption(new Option("--format <format>", "output format").choices(["text", "json"]).default("text"));
   command.addOption(new Option("--override <name=path>", "satisfy a declared dependency locally; repeatable").argParser(collect));
@@ -91,6 +92,7 @@ function addSourceOptions(command: Command, withHarness = true) {
 }
 type SourceOptionValues = {
   project?: string[] | undefined;
+  sourceRoot?: string[] | undefined;
   harness?: string[] | undefined;
   format: OutputFormat;
   override?: string[] | undefined;
@@ -99,7 +101,7 @@ type SourceOptionValues = {
 };
 function sourceArguments(options: SourceOptionValues) {
   return {
-    project: discoverProject({ project: one(options.project, "--project") }),
+    project: discoverProject({ project: one(options.project, "--project"), sourceRoot: one(options.sourceRoot, "--source-root") }),
     harnesses: options.harness ? harnesses(options.harness) : undefined,
     format: options.format,
     overrides: assignments(options.override, "--override"),
@@ -231,13 +233,14 @@ export function createProgram() {
     .addOption(new Option("--harness <harness>", "render only this harness; repeatable").argParser(collect))
     .addOption(new Option("--out <directory>", "managed output directory (default: ./rendered)").argParser(collect))
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
+    .addOption(internalRootOption("--source-root <directory>", "source workspace containing the project"))
     .option("--dry-run", "plan without changing the output")
     .option("--force", "replace listed unmanaged or edited output")
     .addOption(new Option("--override <name=path>", "satisfy a declared dependency from a local path; repeatable").argParser(collect))
     .addOption(internalRootOption("--extra-skill-root <origin=path>", "internal named skill root"))
     .addOption(internalRootOption("--extra-command-root <origin=path>", "internal named command root"))
-    .action((options: { harness?: string[]; out?: string[]; project?: string[]; dryRun?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
-      const project = discoverProject({ project: one(options.project, "--project") });
+    .action((options: { harness?: string[]; out?: string[]; project?: string[]; sourceRoot?: string[]; dryRun?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
+      const project = discoverProject({ project: one(options.project, "--project"), sourceRoot: one(options.sourceRoot, "--source-root") });
       const result = renderProject(project, {
         harnesses: harnesses(options.harness),
         out: one(options.out, "--out"),
@@ -256,15 +259,16 @@ export function createProgram() {
     .requiredOption("--harness <harness>", "harness to install")
     .addOption(new Option("--root <directory>", "destination root (default: current home)").argParser(collect))
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
+    .addOption(internalRootOption("--source-root <directory>", "source workspace containing the project"))
     .option("--dry-run", "plan without changing installed files or state")
     .option("--force", "replace listed unmanaged or edited files")
     .addOption(new Option("--override <name=path>", "satisfy a declared dependency from a local path; repeatable").argParser(collect))
     .addOption(internalRootOption("--extra-skill-root <origin=path>", "internal named skill root"))
     .addOption(internalRootOption("--extra-command-root <origin=path>", "internal named command root"))
-    .action((options: { harness: string; root?: string[]; project?: string[]; dryRun?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
+    .action((options: { harness: string; root?: string[]; project?: string[]; sourceRoot?: string[]; dryRun?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
       const normalized = normalizeHarness(options.harness);
       if (normalized.warning) console.error(normalized.warning);
-      const project = discoverProject({ project: one(options.project, "--project") });
+      const project = discoverProject({ project: one(options.project, "--project"), sourceRoot: one(options.sourceRoot, "--source-root") });
       const result = installProject(project, {
         harness: normalized.name,
         root: one(options.root, "--root"),

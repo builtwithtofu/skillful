@@ -37,6 +37,11 @@
           bunDeps = import ./nix/bun-deps.nix { inherit pkgs; };
           fixture = mkProject { inherit pkgs; src = ./templates/basic; };
           lockedFixture = mkProject { inherit pkgs; src = ./tests/fixtures/locked-project; };
+          sourceMaintenanceFixture = mkProject {
+            inherit pkgs;
+            src = ./tests/fixtures/source-maintenance-project;
+            projectDir = "agent";
+          };
           githubTree = builtins.fetchTree {
             type = "github";
             owner = "angular";
@@ -62,6 +67,52 @@
             grep -Fx opencode-v2 "$TMPDIR/harnesses"
             test -f "$TMPDIR/rendered/pi/skills/example/SKILL.md"
             touch "$out"
+          '';
+          source-maintenance = pkgs.runCommandLocal "skillful-source-maintenance-check" {
+            nativeBuildInputs = [ sourceMaintenanceFixture.cli pkgs.gitMinimal pkgs.gnutar ];
+          } ''
+            export HOME="$TMPDIR/home"
+            export XDG_CACHE_HOME="$TMPDIR/cache"
+            mkdir -p "$HOME" "$XDG_CACHE_HOME" "$out"
+            test -f ${(sourceMaintenanceFixture.forHarness "pi").skills}/agent-jj/SKILL.md
+
+            remote="$TMPDIR/remote"
+            mkdir -p "$remote/angular/angular-skill" "$remote/browser/agent-browser"
+            printf '%s\n' '---' 'name: angular-skill' 'description: angular fixture' '---' > "$remote/angular/angular-skill/SKILL.md"
+            printf '%s\n' '---' 'name: agent-browser' 'description: browser fixture' '---' > "$remote/browser/agent-browser/SKILL.md"
+            git -C "$remote" init -b main >/dev/null
+            git -C "$remote" config user.email test@example.invalid
+            git -C "$remote" config user.name Test
+            git -C "$remote" add .
+            git -C "$remote" commit -m initial >/dev/null
+
+            workspace="$TMPDIR/workspace"
+            work="$workspace/agent"
+            cp -r ${./tests/fixtures/source-maintenance-project} "$workspace"
+            chmod -R u+w "$workspace"
+            git -C "$workspace" init -b main >/dev/null
+
+            cat >> "$work/skill.mod" <<EOF
+
+            require "git:file://$remote@main#browser" as agent-browser (
+              only agent-browser
+            )
+
+            require "git:file://$remote@main#angular" as angular-skills (
+              only angular-skill
+            )
+            EOF
+
+            mkdir "$work/nested"
+            (cd "$work/nested" && skillful update angular-skills)
+
+            skillful update agent-browser --project "$work"
+
+            cp "$work/skill.lock" "$TMPDIR/lock.before"
+            rm -rf "$XDG_CACHE_HOME/skillful"
+            skillful fetch --project "$work"
+            cmp "$TMPDIR/lock.before" "$work/skill.lock"
+            ${skillful}/bin/skillful check --strict --format json --project "$work" --source-root "$workspace" > "$out/pinned-check.json"
           '';
           fixture-render = fixture.checks.render;
           fixture-strict = fixture.checks.strict;
