@@ -144,42 +144,41 @@ export function createProgram() {
     });
 
   program.command("add")
-    .summary("Add one dependency from github:, git:, or path:; pin and fetch it")
-    .description("Add one dependency from a github:, git:, or path: reference: resolve it, record the pin in skill.lock, and fetch it.")
+    .summary("Add or lock one dependency; resolve and fetch remote refs")
+    .description("Add a new dependency, or lock one already declared in skill.mod, then fetch its exact tree.")
     .addHelpText("after", ADD_AFTER_HELP)
-    .argument("<ref>", "github:, git:, or path: reference")
+    .argument("<dependency>", "existing dependency name or github:, git:, or path: reference")
     .addOption(new Option("--name <name>", "dependency alias").argParser(collect))
     .addOption(new Option("--only <skill>", "include only this skill; repeatable").argParser(collect))
     .addOption(new Option("--exclude <skill>", "exclude this skill; repeatable").argParser(collect))
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
     .action(async (ref: string, options: { name?: string[]; only?: string[]; exclude?: string[]; project?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project") });
-      const result = await addDependency(project, ref, { name: one(options.name, "--name"), only: options.only ?? [], exclude: options.exclude ?? [] });
+      const result = await addDependency(project, ref, { name: one(options.name, "--name"), only: options.only, exclude: options.exclude });
       console.log(result.entry ? `Added ${result.requirement.name} at ${result.entry.rev}` : `Added local dependency ${result.requirement.name}`);
     });
 
   program.command("fetch")
     .summary("Fetch exact pins without changing skill.lock")
-    .description("Fetch and verify exact existing pins without changing skill.lock.")
+    .description("Fetch and verify selected or all existing pins without changing skill.lock.")
     .addHelpText("after", FETCH_AFTER_HELP)
+    .argument("[names...]", "dependency names; default: all")
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
-    .addOption(internalRootOption("--override <name=path>", "internal dependency override"))
-    .action(async (options: { project?: string[]; override?: string[] }) => {
+    .action(async (names: string[], options: { project?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project") });
-      const entries = await fetchDependencies(project, undefined, new Set(Object.keys(assignments(options.override, "--override"))));
+      const entries = await fetchDependencies(project, names);
       console.log(`Fetched ${entries.length} locked ${entries.length === 1 ? "dependency" : "dependencies"}`);
     });
 
   program.command("update")
-    .summary("Re-resolve and fetch one or more existing pins")
-    .description("Re-resolve and fetch selected dependency pins already present in skill.lock.")
+    .summary("Resolve and fetch one or more declared dependencies")
+    .description("Create or replace selected dependency pins from skill.mod; default: reconcile every remote dependency.")
     .addHelpText("after", UPDATE_AFTER_HELP)
-    .argument("[names...]", "dependency names; default: all")
+    .argument("[names...]", "dependency names; default: all remotes")
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
-    .addOption(internalRootOption("--override <name=path>", "internal dependency override"))
-    .action(async (names: string[], options: { project?: string[]; override?: string[] }) => {
+    .action(async (names: string[], options: { project?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project") });
-      const entries = await updateDependencies(project, names, undefined, new Set(Object.keys(assignments(options.override, "--override"))));
+      const entries = await updateDependencies(project, names);
       console.log(`Updated ${names.length || entries.length} locked ${names.length === 1 ? "dependency" : "dependencies"}`);
     });
 

@@ -135,13 +135,9 @@ let
     name = "skillful";
     runtimeInputs = [ engineCli ];
     text = ''
-      command="''${1-}"
-      if [[ $# -gt 0 ]]; then shift; fi
-      case "$command" in
-        init|--help|-h|help|"") exec ${engineCli}/bin/skillful "$command" "$@" ;;
-        fmt|add) exec ${engineCli}/bin/skillful "$command" "$@" --project ${lib.escapeShellArg (toString projectSource)} ;;
-        fetch|update) exec ${engineCli}/bin/skillful "$command" "$@" --project ${lib.escapeShellArg (toString projectSource)} ${escapedOverrideArgs} ;;
-        *) exec ${engineCli}/bin/skillful "$command" "$@" ${escapedProjectArgs} ;;
+      case "''${1-}" in
+        list|inspect|check|diff|manifest|schema|render|install) exec ${engineCli}/bin/skillful "$@" ${escapedProjectArgs} ;;
+        *) exec ${engineCli}/bin/skillful "$@" ;;
       esac
     '';
   };

@@ -37,6 +37,7 @@ function fixture() {
 describe("dependency references", () => {
   test("parses canonical GitHub, Git, and path identities", () => {
     expect(parseRef("github:Owner/Repo/skills@main").identity).toBe("github:owner/repo/skills");
+    expect(parseRef("github:Owner/Repo").ref).toBe("github:Owner/Repo@HEAD");
     expect(parseRef("git:ssh://git@example.com/repo.git@main#skills").identity).toBe("git:ssh://git@example.com/repo.git#skills");
     expect(parseRef("path:fixtures/dependency").type).toBe("path");
     expect(() => parseRef("https://example.com/repo")).toThrow("unsupported");
@@ -56,12 +57,24 @@ describe("dependency transactions and cache", () => {
     expect(existsSync(join(paths.dep!, "skill-b", "SKILL.md"))).toBe(true);
   });
 
-  test("adopts an exact unlocked declaration and rejects conflicting adoption", async () => {
+  test("infers a stable dependency name when adding a new tree", async () => {
+    const { project, ref, cache } = fixture();
+    const result = await addDependency(discoverProject({ project }), ref, { cache });
+    expect(result.requirement.name).toBe("dependency");
+    expect(readFileSync(join(project, "skill.mod"), "utf8")).toContain(`require ${JSON.stringify(ref)} as dependency`);
+    expect(readLock(project)[0]?.name).toBe("dependency");
+  });
+
+  test("locks an existing declaration by name and preserves its choices", async () => {
     const { project, ref, cache } = fixture();
     const modPath = join(project, "skill.mod");
     writeFileSync(modPath, formatText(`${readFileSync(modPath, "utf8")}\nrequire ${JSON.stringify(ref)} as dep (\n  only skill-a\n)\n`));
-    await addDependency(discoverProject({ project }), ref, { name: "dep", only: ["skill-a"], cache });
-    expect((readFileSync(modPath, "utf8").match(/require /g) ?? [])).toHaveLength(1);
+    const before = readFileSync(modPath, "utf8");
+
+    await addDependency(discoverProject({ project }), "dep", { cache });
+
+    expect(readFileSync(modPath, "utf8")).toBe(before);
+    expect(readLock(project)[0]?.name).toBe("dep");
     await expect(addDependency(discoverProject({ project }), ref, { name: "dep", only: ["skill-b"], cache })).rejects.toThrow("conflicts");
   });
 
@@ -79,12 +92,12 @@ describe("dependency transactions and cache", () => {
     await addDependency(discoverProject({ project }), ref, { name: "dep", cache });
     const lockBefore = readFileSync(join(project, "skill.lock"), "utf8");
     const fresh = join(root, "fresh-cache");
-    await fetchDependencies(discoverProject({ project }), fresh);
+    await fetchDependencies(discoverProject({ project }), [], fresh);
     expect(readFileSync(join(project, "skill.lock"), "utf8")).toBe(lockBefore);
     const cacheRoot = join(fresh, "skillful");
     const entryDir = join(cacheRoot, readdirSync(cacheRoot).find((name) => !name.startsWith("."))!);
     writeFileSync(join(entryDir, "skill-a", "SKILL.md"), "tampered");
-    await expect(fetchDependencies(discoverProject({ project }), fresh)).rejects.toThrow("hash mismatch");
+    await expect(fetchDependencies(discoverProject({ project }), [], fresh)).rejects.toThrow("hash mismatch");
   });
 
   test("update moves a branch pin and fetches the new tree", async () => {
@@ -98,12 +111,42 @@ describe("dependency transactions and cache", () => {
     expect(readLock(project)[0]!.rev).not.toBe(oldRev);
   });
 
-  test("path dependencies update only the manifest", async () => {
-    const { project } = fixture();
-    mkdirSync(join(project, "local", "local-skill"), { recursive: true });
-    writeFileSync(join(project, "local", "local-skill", "SKILL.md"), "---\nname: local-skill\n---\n");
-    await addDependency(discoverProject({ project }), "path:local", { name: "local" });
+  test("updates one declared dependency without requiring unrelated pins", async () => {
+    const { root, project, ref, cache } = fixture();
+    const modPath = join(project, "skill.mod");
+    writeFileSync(modPath, formatText(`${readFileSync(modPath, "utf8")}\nrequire ${JSON.stringify(ref)} as dep\nrequire ${JSON.stringify(ref.replace(/@main$/, "@missing"))} as later\n`));
+    const before = readFileSync(modPath, "utf8");
+
+    await updateDependencies(discoverProject({ project }), ["dep"], cache);
+
+    expect(readFileSync(modPath, "utf8")).toBe(before);
+    expect(readLock(project).map((entry) => entry.name)).toEqual(["dep"]);
+    const lockBefore = readFileSync(join(project, "skill.lock"), "utf8");
+    await fetchDependencies(discoverProject({ project }), ["dep"], join(root, "fresh-cache"));
+    expect(readFileSync(join(project, "skill.lock"), "utf8")).toBe(lockBefore);
+    await expect(updateDependencies(discoverProject({ project }), [], cache)).rejects.toThrow();
+    expect(readFileSync(join(project, "skill.lock"), "utf8")).toBe(lockBefore);
+  });
+
+  test("uses a sibling path dependency from the source workspace", async () => {
+    const { root, project, dependency } = fixture();
+    git(root, "init", "-b", "main");
+
+    await addDependency(discoverProject({ project }), "path:../dependency", { name: "local" });
+
     expect(existsSync(join(project, "skill.lock"))).toBe(false);
-    expect(cachedDependencyPaths(discoverProject({ project })).local).toBe(join(project, "local"));
+    expect(cachedDependencyPaths(discoverProject({ project })).local).toBe(dependency);
+    const before = readFileSync(join(project, "skill.mod"), "utf8");
+    await expect(addDependency(discoverProject({ project }), "path:../..", { name: "outside" })).rejects.toThrow("escapes the source root");
+    expect(readFileSync(join(project, "skill.mod"), "utf8")).toBe(before);
+  });
+
+  test("does not treat a remote override as its fallback lock", () => {
+    const { project, dependency, ref, cache } = fixture();
+    const modPath = join(project, "skill.mod");
+    writeFileSync(modPath, formatText(`${readFileSync(modPath, "utf8")}\nrequire ${JSON.stringify(ref)} as dep\n`));
+    writeFileSync(join(project, "skill.lock"), "");
+
+    expect(() => cachedDependencyPaths(discoverProject({ project }), { dep: dependency }, cache)).toThrow("declared but not locked");
   });
 });

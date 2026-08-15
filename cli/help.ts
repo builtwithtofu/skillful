@@ -16,7 +16,7 @@ Getting oriented
 
 Common commands
   skillful init --dir DIR
-  skillful add github:owner/repo@main --name alias --only skill
+  skillful add github:owner/repo
   skillful list skills
   skillful inspect <skill>
   skillful render --dry-run
@@ -49,14 +49,18 @@ Afterward:
 `;
 
 export const ADD_AFTER_HELP = `
-Use add to bring a new tree in, or to lock a require that already exists in
-skill.mod. Adopting an existing require must repeat that alias and the exact
---only / --exclude set. Use update to move an existing pin. Use fetch to
-re-fetch existing pins exactly.
+Use add to bring in a new tree or lock a require already declared in skill.mod.
+For an existing require, pass its name; skill.mod supplies the ref, alias, and
+--only / --exclude choices. Explicit matching details are also accepted.
+
+New GitHub refs default to @HEAD, the repository's default branch. Without --name, the repository or subdirectory
+name is used. Omit selectors to include the whole tree.
 
 Examples:
-  skillful add github:owner/repo@main --name alias --only skill-name
-  skillful add path:../shared --name shared
+  skillful add agent-browser
+  skillful add github:owner/repo
+  skillful add github:owner/repo@tag --name alias --only skill-name
+  skillful add path:../shared
 
 Afterward:
   skillful check --strict
@@ -64,15 +68,18 @@ Afterward:
 `;
 
 export const FETCH_AFTER_HELP = `
-Never changes skill.lock. Use update to move a pin. Use add to create one.
+Never changes skill.lock. Named fetches are independent of unrelated project
+readiness. Use update to create or move a pin.
 
 Examples:
   skillful fetch
+  skillful fetch alias
 `;
 
 export const UPDATE_AFTER_HELP = `
-Only re-resolves names already in skill.lock. It does not create a missing pin
-and does not edit skill.mod. Use add to adopt a declared-but-unlocked require.
+Uses declarations in skill.mod and never edits them. A named update creates or
+replaces that dependency's pin without requiring unrelated pins. With no names,
+update resolves every remote dependency before replacing the lock atomically.
 
 Examples:
   skillful update
