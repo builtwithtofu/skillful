@@ -11,12 +11,55 @@ const run = (cwd: string, ...args: string[]) => Bun.spawnSync(["bun", join(impor
 const output = (result: ReturnType<typeof run>) => ({ stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) });
 
 describe("project CLI", () => {
-  test("Commander help leads with the user journey", () => {
+  test("root help orients humans and agents without a Nix story", () => {
     const result = run(temp(), "--help");
+    const { stdout } = output(result);
     expect(result.exitCode).toBe(0);
-    expect(output(result).stdout).toContain("init [options]");
-    expect(output(result).stdout).toContain("render [options]");
-    expect(output(result).stdout).toContain("install [options]");
+    expect(stdout).toContain("Author agent skills once, render them per harness.");
+    expect(stdout).toContain("skillful skills tree");
+    expect(stdout).toContain("skillful <command> --help");
+    expect(stdout).toContain("init [options]");
+    expect(stdout).toContain("render [options]");
+    expect(stdout).toContain("install [options]");
+    expect(stdout.toLowerCase()).not.toContain("nix");
+  });
+
+  test("skills tree lists legal topic names and show loads that topic", () => {
+    const tree = run(temp(), "skills", "tree");
+    expect(tree.exitCode).toBe(0);
+    const treeText = output(tree).stdout;
+    expect(treeText).toContain("core");
+    expect(treeText).toContain("author");
+    expect(treeText).toContain("mod");
+    expect(treeText).toContain("deps");
+    expect(treeText).toContain("inspect");
+    expect(treeText).toContain("render");
+    expect(treeText).toContain("skillful skills show <topic>");
+    expect(treeText.toLowerCase()).not.toContain("nix");
+
+    const shown = run(temp(), "skills", "show", "core");
+    expect(shown.exitCode).toBe(0);
+    const shownText = output(shown).stdout;
+    expect(shownText).toContain("skillful guides › core");
+    expect(shownText).toContain("next (`skillful skills show <topic>`):");
+    expect(shownText).toContain("  author");
+    expect(shownText.toLowerCase()).not.toContain("nix");
+
+    const miss = run(temp(), "skills", "show", "lock");
+    expect(miss.exitCode).toBe(1);
+    expect(output(miss).stderr).toContain("unknown guide topic");
+    expect(output(miss).stderr).toContain("skillful skills tree");
+    expect(output(miss).stderr).toContain("author");
+  });
+
+  test("add help says when to use it and hides empty-array defaults", () => {
+    const result = run(temp(), "add", "--help");
+    const { stdout } = output(result);
+    expect(result.exitCode).toBe(0);
+    expect(stdout).toContain("github:");
+    expect(stdout).toContain("skillful add ");
+    expect(stdout).not.toContain("(default: [])");
+    expect(stdout.toLowerCase()).not.toContain("nix");
   });
 
   test("init then fmt --check is a Bun-only journey", () => {
