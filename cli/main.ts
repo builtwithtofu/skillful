@@ -3,13 +3,30 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { Argument, Command, CommanderError, Option } from "commander";
 import { addDependency, fetchDependencies, updateDependencies } from "./deps.ts";
 import { normalizeHarness } from "./harness.ts";
+import {
+  ADD_AFTER_HELP,
+  CHECK_AFTER_HELP,
+  DIFF_AFTER_HELP,
+  FETCH_AFTER_HELP,
+  FMT_AFTER_HELP,
+  INIT_AFTER_HELP,
+  INSPECT_AFTER_HELP,
+  INSTALL_AFTER_HELP,
+  RENDER_AFTER_HELP,
+  ROOT_AFTER_HELP,
+  SKILLS_AFTER_HELP,
+  UPDATE_AFTER_HELP,
+} from "./help.ts";
 import { installProject } from "./install.ts";
 import { checkCommand, diffCommand, inspectCommand, listCommand, manifestCommand, schemaCommand, type OutputFormat } from "./introspect.ts";
 import { formatText, type HarnessId } from "./mod.ts";
 import { discoverProject, initProject } from "./project.ts";
 import { renderProject } from "./render.ts";
+import { renderSkillTopic, resolveSkillTopic, skillTree } from "./skills.ts";
 
-const collect = (value: string, previous: string[] = []) => [...previous, value];
+function collect(value: string, previous: string[] = []) {
+  return [...previous, value];
+}
 function one(values: string[] | undefined, flag: string) {
   if (!values?.length) return undefined;
   if (values.length > 1) throw new CliUsageError(`duplicate ${flag}`, `Use ${flag} once.`);
@@ -62,23 +79,23 @@ function printDomainError(error: unknown, json = false) {
   else console.error(`Error: ${message}\nRecovery: ${recovery}`);
   process.exitCode = error instanceof CliUsageError ? 2 : 1;
 }
-function internalRootOption(flags: string, description: string) { return new Option(flags, description).argParser(collect).default([]).hideHelp(); }
+function internalRootOption(flags: string, description: string) { return new Option(flags, description).argParser(collect).hideHelp(); }
 function addSourceOptions(command: Command, withHarness = true) {
-  command.addOption(new Option("--project <directory>", "project directory").argParser(collect).default([]));
-  if (withHarness) command.addOption(new Option("--harness <harness>", "select a harness; repeatable").argParser(collect).default([]));
+  command.addOption(new Option("--project <directory>", "project directory").argParser(collect));
+  if (withHarness) command.addOption(new Option("--harness <harness>", "select a harness; repeatable").argParser(collect));
   command.addOption(new Option("--format <format>", "output format").choices(["text", "json"]).default("text"));
-  command.addOption(new Option("--override <name=path>", "satisfy a declared dependency locally; repeatable").argParser(collect).default([]));
+  command.addOption(new Option("--override <name=path>", "satisfy a declared dependency locally; repeatable").argParser(collect));
   command.addOption(internalRootOption("--extra-skill-root <origin=path>", "internal named skill root"));
   command.addOption(internalRootOption("--extra-command-root <origin=path>", "internal named command root"));
   return command;
 }
 type SourceOptionValues = {
-  project: string[];
+  project?: string[] | undefined;
   harness?: string[] | undefined;
   format: OutputFormat;
-  override: string[];
-  extraSkillRoot: string[];
-  extraCommandRoot: string[];
+  override?: string[] | undefined;
+  extraSkillRoot?: string[] | undefined;
+  extraCommandRoot?: string[] | undefined;
 };
 function sourceArguments(options: SourceOptionValues) {
   return {
@@ -94,24 +111,29 @@ export function createProgram() {
   const program = new Command()
     .name("skillful")
     .description("Author agent skills once, render them per harness.")
-    .showHelpAfterError()
-    .showSuggestionAfterError()
+    .addHelpText("after", ROOT_AFTER_HELP)
+    .helpCommand(false)
     .allowExcessArguments(false)
     .exitOverride();
 
+  program.commandsGroup("Project:");
   program.command("init")
-    .description("Create the shared basic project scaffold")
-    .addOption(new Option("--dir <directory>", "destination directory").argParser(collect).default([]))
-    .action((options: { dir: string[] }) => {
+    .summary("Create a project scaffold: skill.mod, skills/, commands/, rules/")
+    .description("Create a new skillful project: skill.mod plus skills/, commands/, and rules/ scaffolding.")
+    .addHelpText("after", INIT_AFTER_HELP)
+    .addOption(new Option("--dir <directory>", "destination directory").argParser(collect))
+    .action((options: { dir?: string[] }) => {
       const result = initProject(one(options.dir, "--dir") ?? process.cwd());
       console.log(result.created ? `Initialized skillful project in ${result.root}` : `Skillful project already initialized in ${result.root}`);
     });
 
   program.command("fmt")
-    .description("Canonicalize skill.mod or check its format")
+    .summary("Rewrite skill.mod canonically, or check it")
+    .description("Canonicalize skill.mod, or check its format without writing.")
+    .addHelpText("after", FMT_AFTER_HELP)
     .option("--check", "report noncanonical formatting without writing")
-    .addOption(new Option("--project <directory>", "project directory").argParser(collect).default([]))
-    .action((options: { check?: boolean; project: string[] }) => {
+    .addOption(new Option("--project <directory>", "project directory").argParser(collect))
+    .action((options: { check?: boolean; project?: string[] }) => {
       const resolved = discoverProject({ project: one(options.project, "--project") });
       const original = readFileSync(resolved.modPath, "utf8");
       const formatted = formatText(original, resolved.modPath);
@@ -122,50 +144,100 @@ export function createProgram() {
     });
 
   program.command("add")
-    .description("Declare, resolve, lock, and fetch one dependency")
+    .summary("Add one dependency from github:, git:, or path:; pin and fetch it")
+    .description("Add one dependency from a github:, git:, or path: reference: resolve it, record the pin in skill.lock, and fetch it.")
+    .addHelpText("after", ADD_AFTER_HELP)
     .argument("<ref>", "github:, git:, or path: reference")
-    .addOption(new Option("--name <name>", "dependency alias").argParser(collect).default([]))
-    .addOption(new Option("--only <skill>", "include only this skill; repeatable").argParser(collect).default([]))
-    .addOption(new Option("--exclude <skill>", "exclude this skill; repeatable").argParser(collect).default([]))
-    .addOption(new Option("--project <directory>", "project directory").argParser(collect).default([]))
-    .action(async (ref: string, options: { name: string[]; only: string[]; exclude: string[]; project: string[] }) => {
+    .addOption(new Option("--name <name>", "dependency alias").argParser(collect))
+    .addOption(new Option("--only <skill>", "include only this skill; repeatable").argParser(collect))
+    .addOption(new Option("--exclude <skill>", "exclude this skill; repeatable").argParser(collect))
+    .addOption(new Option("--project <directory>", "project directory").argParser(collect))
+    .action(async (ref: string, options: { name?: string[]; only?: string[]; exclude?: string[]; project?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project") });
-      const result = await addDependency(project, ref, { name: one(options.name, "--name"), only: options.only, exclude: options.exclude });
+      const result = await addDependency(project, ref, { name: one(options.name, "--name"), only: options.only ?? [], exclude: options.exclude ?? [] });
       console.log(result.entry ? `Added ${result.requirement.name} at ${result.entry.rev}` : `Added local dependency ${result.requirement.name}`);
     });
 
   program.command("fetch")
-    .description("Fetch and verify exact existing pins without changing skill.lock")
-    .addOption(new Option("--project <directory>", "project directory").argParser(collect).default([]))
+    .summary("Fetch exact pins without changing skill.lock")
+    .description("Fetch and verify exact existing pins without changing skill.lock.")
+    .addHelpText("after", FETCH_AFTER_HELP)
+    .addOption(new Option("--project <directory>", "project directory").argParser(collect))
     .addOption(internalRootOption("--override <name=path>", "internal dependency override"))
-    .action(async (options: { project: string[]; override: string[] }) => {
+    .action(async (options: { project?: string[]; override?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project") });
       const entries = await fetchDependencies(project, undefined, new Set(Object.keys(assignments(options.override, "--override"))));
       console.log(`Fetched ${entries.length} locked ${entries.length === 1 ? "dependency" : "dependencies"}`);
     });
 
   program.command("update")
-    .description("Re-resolve and fetch selected dependency pins")
+    .summary("Re-resolve and fetch one or more existing pins")
+    .description("Re-resolve and fetch selected dependency pins already present in skill.lock.")
+    .addHelpText("after", UPDATE_AFTER_HELP)
     .argument("[names...]", "dependency names; default: all")
-    .addOption(new Option("--project <directory>", "project directory").argParser(collect).default([]))
+    .addOption(new Option("--project <directory>", "project directory").argParser(collect))
     .addOption(internalRootOption("--override <name=path>", "internal dependency override"))
-    .action(async (names: string[], options: { project: string[]; override: string[] }) => {
+    .action(async (names: string[], options: { project?: string[]; override?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project") });
       const entries = await updateDependencies(project, names, undefined, new Set(Object.keys(assignments(options.override, "--override"))));
       console.log(`Updated ${names.length || entries.length} locked ${names.length === 1 ? "dependency" : "dependencies"}`);
     });
 
+  program.commandsGroup("Understand:");
+  addSourceOptions(program.command("list")
+    .summary("List delivered skills or known harnesses")
+    .description("List delivered skills or public harnesses.")
+    .addArgument(new Argument("<selector>", "skills or harnesses").choices(["skills", "harnesses"])))
+    .action((selector: "skills" | "harnesses", options: SourceOptionValues) => { const source = sourceArguments(options); listCommand(source.project, selector, source); });
+
+  addSourceOptions(program.command("inspect")
+    .summary("Explain one skill across harnesses")
+    .description("Explain one skill across harnesses.")
+    .addHelpText("after", INSPECT_AFTER_HELP)
+    .argument("<skill>", "skill selector"))
+    .option("--rendered", "include rendered bodies")
+    .action((name: string, options: SourceOptionValues & { rendered?: boolean | undefined }) => { const source = sourceArguments(options); inspectCommand(source.project, name, { ...source, rendered: options.rendered }); });
+
+  addSourceOptions(program.command("check")
+    .summary("Validate the resolved project")
+    .description("Validate the resolved project.")
+    .addHelpText("after", CHECK_AFTER_HELP)
+    .argument("[skills...]", "optional skill selectors"))
+    .option("--strict", "promote warnings to failure")
+    .action((names: string[], options: SourceOptionValues & { strict?: boolean | undefined }) => { const source = sourceArguments(options); checkCommand(source.project, names, { ...source, strict: options.strict }); });
+
+  addSourceOptions(program.command("diff")
+    .summary("Diff one skill across harnesses or against a local revision")
+    .description("Compare one skill across harnesses or with a local revision.")
+    .addHelpText("after", DIFF_AFTER_HELP)
+    .argument("<skill>", "skill selector"))
+    .addOption(new Option("--against <revision>", "local Git revision").argParser(collect))
+    .action((name: string, options: SourceOptionValues & { against?: string[] }) => { const source = sourceArguments(options); diffCommand(source.project, name, { ...source, against: one(options.against, "--against") }); });
+
+  addSourceOptions(program.command("manifest")
+    .summary("Emit the resolved schemaVersion-1 manifest")
+    .description("Emit the resolved schemaVersion-1 manifest."))
+    .action((options: SourceOptionValues) => { const source = sourceArguments(options); manifestCommand(source.project, source); });
+
+  addSourceOptions(program.command("schema")
+    .summary("Describe harness facts and renderer markup")
+    .description("Describe harness facts and renderer markup."), false)
+    .action((options: SourceOptionValues) => { const source = sourceArguments(options); schemaCommand(source.project, source); });
+
+  program.commandsGroup("Deliver:");
   program.command("render")
-    .description("Render a managed build tree without installing it")
-    .addOption(new Option("--harness <harness>", "render only this harness; repeatable").argParser(collect).default([]))
-    .addOption(new Option("--out <directory>", "managed output directory (default: ./rendered)").argParser(collect).default([]))
-    .addOption(new Option("--project <directory>", "project directory").argParser(collect).default([]))
+    .summary("Write a managed build tree; touches no harnesses")
+    .description("Render a managed build tree without installing it.")
+    .addHelpText("after", RENDER_AFTER_HELP)
+    .addOption(new Option("--harness <harness>", "render only this harness; repeatable").argParser(collect))
+    .addOption(new Option("--out <directory>", "managed output directory (default: ./rendered)").argParser(collect))
+    .addOption(new Option("--project <directory>", "project directory").argParser(collect))
     .option("--dry-run", "plan without changing the output")
     .option("--force", "replace listed unmanaged or edited output")
-    .addOption(new Option("--override <name=path>", "satisfy a declared dependency from a local path; repeatable").argParser(collect).default([]))
+    .addOption(new Option("--override <name=path>", "satisfy a declared dependency from a local path; repeatable").argParser(collect))
     .addOption(internalRootOption("--extra-skill-root <origin=path>", "internal named skill root"))
     .addOption(internalRootOption("--extra-command-root <origin=path>", "internal named command root"))
-    .action((options: { harness: string[]; out: string[]; project: string[]; dryRun?: boolean; force?: boolean; override: string[]; extraSkillRoot: string[]; extraCommandRoot: string[] }) => {
+    .action((options: { harness?: string[]; out?: string[]; project?: string[]; dryRun?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project") });
       const result = renderProject(project, {
         harnesses: harnesses(options.harness),
@@ -179,16 +251,18 @@ export function createProgram() {
     });
 
   program.command("install")
-    .description("Safely install one harness into a destination root")
+    .summary("Install one harness into a destination root")
+    .description("Safely install one harness into a destination root.")
+    .addHelpText("after", INSTALL_AFTER_HELP)
     .requiredOption("--harness <harness>", "harness to install")
-    .addOption(new Option("--root <directory>", "destination root (default: current home)").argParser(collect).default([]))
-    .addOption(new Option("--project <directory>", "project directory").argParser(collect).default([]))
+    .addOption(new Option("--root <directory>", "destination root (default: current home)").argParser(collect))
+    .addOption(new Option("--project <directory>", "project directory").argParser(collect))
     .option("--dry-run", "plan without changing installed files or state")
     .option("--force", "replace listed unmanaged or edited files")
-    .addOption(new Option("--override <name=path>", "satisfy a declared dependency from a local path; repeatable").argParser(collect).default([]))
+    .addOption(new Option("--override <name=path>", "satisfy a declared dependency from a local path; repeatable").argParser(collect))
     .addOption(internalRootOption("--extra-skill-root <origin=path>", "internal named skill root"))
     .addOption(internalRootOption("--extra-command-root <origin=path>", "internal named command root"))
-    .action((options: { harness: string; root: string[]; project: string[]; dryRun?: boolean; force?: boolean; override: string[]; extraSkillRoot: string[]; extraCommandRoot: string[] }) => {
+    .action((options: { harness: string; root?: string[]; project?: string[]; dryRun?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
       const normalized = normalizeHarness(options.harness);
       if (normalized.warning) console.error(normalized.warning);
       const project = discoverProject({ project: one(options.project, "--project") });
@@ -203,26 +277,18 @@ export function createProgram() {
       printChanges(options.dryRun ? "Would install into" : "Installed into", result.root, result.changes);
     });
 
-  addSourceOptions(program.command("list").description("List delivered skills or public harnesses").addArgument(new Argument("<selector>", "skills or harnesses").choices(["skills", "harnesses"])))
-    .action((selector: "skills" | "harnesses", options: SourceOptionValues) => { const source = sourceArguments(options); listCommand(source.project, selector, source); });
-
-  addSourceOptions(program.command("inspect").description("Explain one skill across harnesses").argument("<skill>", "skill selector"))
-    .option("--rendered", "include rendered bodies")
-    .action((name: string, options: SourceOptionValues & { rendered?: boolean | undefined }) => { const source = sourceArguments(options); inspectCommand(source.project, name, { ...source, rendered: options.rendered }); });
-
-  addSourceOptions(program.command("check").description("Validate the resolved project").argument("[skills...]", "optional skill selectors"))
-    .option("--strict", "promote warnings to failure")
-    .action((names: string[], options: SourceOptionValues & { strict?: boolean | undefined }) => { const source = sourceArguments(options); checkCommand(source.project, names, { ...source, strict: options.strict }); });
-
-  addSourceOptions(program.command("diff").description("Compare one skill across harnesses or with a local revision").argument("<skill>", "skill selector"))
-    .addOption(new Option("--against <revision>", "local Git revision").argParser(collect).default([]))
-    .action((name: string, options: SourceOptionValues & { against: string[] }) => { const source = sourceArguments(options); diffCommand(source.project, name, { ...source, against: one(options.against, "--against") }); });
-
-  addSourceOptions(program.command("manifest").description("Emit the resolved schemaVersion-1 manifest"))
-    .action((options: SourceOptionValues) => { const source = sourceArguments(options); manifestCommand(source.project, source); });
-
-  addSourceOptions(program.command("schema").description("Describe harness facts and renderer markup"), false)
-    .action((options: SourceOptionValues) => { const source = sourceArguments(options); schemaCommand(source.project, source); });
+  program.commandsGroup("Guides:");
+  const skills = program.command("skills")
+    .summary("Print the agent topic map, or one guide")
+    .description("Print the agent topic map, or load one guide. Topics are exact names from the tree.")
+    .addHelpText("after", SKILLS_AFTER_HELP);
+  skills.command("tree")
+    .description("Print the legal topic names")
+    .action(() => { process.stdout.write(skillTree()); });
+  skills.command("show")
+    .description("Print one guide")
+    .argument("<topic>", "exact topic name from skillful skills tree")
+    .action((topic: string) => { process.stdout.write(renderSkillTopic(resolveSkillTopic(topic))); });
   return program;
 }
 
