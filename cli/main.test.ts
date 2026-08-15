@@ -52,12 +52,12 @@ describe("project CLI", () => {
     expect(output(miss).stderr).toContain("author");
   });
 
-  test("add help says when to use it and hides empty-array defaults", () => {
+  test("add help leads with inferred dependency choices", () => {
     const result = run(temp(), "add", "--help");
     const { stdout } = output(result);
     expect(result.exitCode).toBe(0);
-    expect(stdout).toContain("github:");
-    expect(stdout).toContain("skillful add ");
+    expect(stdout).toContain("skillful add agent-browser");
+    expect(stdout).toContain("default to @HEAD");
     expect(stdout).not.toContain("(default: [])");
     expect(stdout.toLowerCase()).not.toContain("nix");
   });

@@ -1,12 +1,12 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseMod, type SkillMod } from "./mod.ts";
 import { BASIC_SCAFFOLD } from "./scaffold.ts";
 
 export class ProjectError extends Error {
   constructor(message: string, readonly recovery: string) { super(message); }
 }
-export type Project = { root: string; modPath: string; mod: SkillMod };
+export type Project = { root: string; sourceRoot: string; modPath: string; mod: SkillMod };
 
 function error(message: string, recovery: string): never { throw new ProjectError(message, recovery); }
 function scaffoldTree(entries: string[]) {
@@ -34,7 +34,22 @@ function portableTree(root: string, prefix = ""): string[] {
     .sort();
 }
 
-export function discoverProject({ cwd = process.cwd(), project }: { cwd?: string | undefined; project?: string | undefined } = {}): Project {
+export function isInside(root: string, path: string) {
+  const rel = relative(root, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function discoverSourceRoot(projectRoot: string) {
+  let candidate = projectRoot;
+  while (true) {
+    if (existsSync(join(candidate, ".git")) || existsSync(join(candidate, ".jj"))) return realpathSync(candidate);
+    const parent = dirname(candidate);
+    if (parent === candidate) return projectRoot;
+    candidate = parent;
+  }
+}
+
+export function discoverProject({ cwd = process.cwd(), project, sourceRoot }: { cwd?: string | undefined; project?: string | undefined; sourceRoot?: string | undefined } = {}): Project {
   let root: string;
   if (project) {
     const selected = resolve(cwd, project);
@@ -50,8 +65,12 @@ export function discoverProject({ cwd = process.cwd(), project }: { cwd?: string
       candidate = parent;
     }
   }
+  const selectedSource = sourceRoot === undefined ? undefined : resolve(cwd, sourceRoot);
+  if (selectedSource !== undefined && (!existsSync(selectedSource) || !statSync(selectedSource).isDirectory())) error(`source root does not exist: ${selectedSource}`, "Pass an existing source root containing the project.");
+  const selectedSourceRoot = selectedSource === undefined ? discoverSourceRoot(root!) : realpathSync(selectedSource);
+  if (!isInside(selectedSourceRoot, root!)) error(`project directory is outside its source root: ${root}`, "Choose a source root that contains the project directory.");
   const modPath = join(root!, "skill.mod");
-  try { return { root: root!, modPath, mod: parseMod(readFileSync(modPath, "utf8"), modPath) }; }
+  try { return { root: root!, sourceRoot: selectedSourceRoot, modPath, mod: parseMod(readFileSync(modPath, "utf8"), modPath) }; }
   catch (cause) {
     if (cause instanceof ProjectError) throw cause;
     throw cause;

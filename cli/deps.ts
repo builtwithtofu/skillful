@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { cacheKey, narHash } from "./nar.ts";
 import { readLock, validateLock, writeLockAtomic, type LockEntry } from "./lock.ts";
 import { formatMod, type Require, type SkillMod } from "./mod.ts";
-import type { Project } from "./project.ts";
+import { isInside, type Project } from "./project.ts";
 
 export type ParsedRef =
   | { type: "github"; ref: string; identity: string; owner: string; repo: string; subdir: string | undefined; version: string }
@@ -23,19 +23,20 @@ export function parseRef(ref: string): ParsedRef {
   if (ref.startsWith("path:")) {
     const path = ref.slice(5);
     if (!path) fail("path dependency is empty", "Use path:relative/directory.");
-    if (path.startsWith("/") || path.split("/").includes("..")) fail(`path dependency escapes the project: ${path}`, "Use a relative path inside the project root.");
+    if (isAbsolute(path)) fail(`path dependency must be relative: ${path}`, "Use a path relative to skill.mod.");
     return { type: "path", ref, identity: `path:${path.replace(/\/$/, "")}`, path };
   }
   if (ref.startsWith("github:")) {
-    const at = ref.lastIndexOf("@");
-    if (at <= "github:".length || at === ref.length - 1) fail(`GitHub ref needs @version: ${ref}`, "Use github:owner/repo[/subdir]@tag-or-revision.");
-    const path = ref.slice("github:".length, at);
+    const resolvedRef = ref.includes("@") ? ref : `${ref}@HEAD`;
+    const at = resolvedRef.lastIndexOf("@");
+    if (at <= "github:".length || at === resolvedRef.length - 1) fail(`GitHub ref needs @version: ${ref}`, "Use github:owner/repo[/subdir]@tag-or-revision.");
+    const path = resolvedRef.slice("github:".length, at);
     const parts = path.split("/");
     if (parts.length < 2 || parts.some((part) => !part || part === "." || part === "..")) fail(`invalid GitHub ref: ${ref}`, "Use github:owner/repo[/subdir]@version.");
     const [owner, repo, ...rest] = parts;
     const subdir = validateSubdir(rest.length ? rest.join("/") : undefined);
     const identity = `github:${owner!.toLowerCase()}/${repo!.toLowerCase()}${subdir ? `/${subdir}` : ""}`;
-    return { type: "github", ref, identity, owner: owner!, repo: repo!, subdir, version: ref.slice(at + 1) };
+    return { type: "github", ref: resolvedRef, identity, owner: owner!, repo: repo!, subdir, version: resolvedRef.slice(at + 1) };
   }
   if (ref.startsWith("git:")) {
     const hash = ref.indexOf("#");
@@ -143,16 +144,12 @@ function effectiveRoot(project: Project, requirement: Require, wholeTree: string
   const parsed = parseRef(requirement.ref);
   const root = parsed.type === "path" ? resolve(project.root, parsed.path) : parsed.subdir ? join(wholeTree, parsed.subdir) : wholeTree;
   const real = realpathSync(root);
-  if (parsed.type === "path") {
-    const rel = relative(project.root, real);
-    if (!rel || rel === ".." || rel.startsWith("../")) fail(`path dependency ${requirement.name} escapes the project`, "Use a path inside the project root.");
-  }
+  if (parsed.type === "path" && !isInside(project.sourceRoot, real)) fail(`path dependency ${requirement.name} escapes the source root`, `Choose a path inside ${project.sourceRoot}.`);
   return real;
 }
 export function cachedDependencyPaths(project: Project, overrides: Record<string, string> = {}, explicitCache?: string) {
-  const overridden = new Set(Object.keys(overrides));
-  const needsLock = project.mod.requires.some((requirement) => !requirement.ref.startsWith("path:") && !overridden.has(requirement.name));
-  const entries = validateLock(project.mod, readLock(project.root, needsLock), overridden);
+  const needsLock = project.mod.requires.some((requirement) => !requirement.ref.startsWith("path:"));
+  const entries = validateLock(project.mod, readLock(project.root, needsLock));
   const byName = new Map(entries.map((entry) => [entry.name, entry]));
   const result: Record<string, string> = { ...overrides };
   for (const requirement of project.mod.requires) {
@@ -170,9 +167,8 @@ export function cachedDependencyPaths(project: Project, overrides: Record<string
   return result;
 }
 export async function dependencyPaths(project: Project, overrides: Record<string, string> = {}, explicitCache?: string) {
-  const overridden = new Set(Object.keys(overrides));
-  const entries = readLock(project.root, project.mod.requires.some((requirement) => !requirement.ref.startsWith("path:") && !overridden.has(requirement.name)));
-  validateLock(project.mod, entries, overridden);
+  const entries = readLock(project.root, project.mod.requires.some((requirement) => !requirement.ref.startsWith("path:")));
+  validateLock(project.mod, entries);
   const byName = new Map(entries.map((entry) => [entry.name, entry]));
   const result: Record<string, string> = { ...overrides };
   for (const requirement of project.mod.requires) {
@@ -184,6 +180,15 @@ export async function dependencyPaths(project: Project, overrides: Record<string
   return result;
 }
 function sameSelectors(requirement: Require, mode: "only" | "exclude" | undefined, selectors: string[]) { return requirement.mode === mode && [...requirement.selectors].sort().join("\0") === [...selectors].sort().join("\0"); }
+function inferredDependencyName(parsed: ParsedRef) {
+  const candidate = (parsed.type === "github"
+    ? parsed.subdir?.split("/").at(-1) ?? parsed.repo
+    : parsed.type === "git"
+      ? parsed.subdir?.split("/").at(-1) ?? parsed.url.replace(/\/$/, "").split(/[/:]/).at(-1)?.replace(/\.git$/, "")
+      : parsed.path.replace(/\/$/, "").split("/").at(-1))?.toLowerCase();
+  if (!candidate || !/^[a-z0-9][a-z0-9._-]*$/.test(candidate)) fail(`cannot infer a dependency name from ${parsed.ref}`, "Pass --name using lowercase letters, digits, dots, underscores, or hyphens.");
+  return candidate;
+}
 function transactionalWrite(project: Project, mod: SkillMod, entries: LockEntry[]) {
   const modBefore = readFileSync(project.modPath, "utf8");
   const lockPath = join(project.root, "skill.lock");
@@ -195,35 +200,70 @@ function transactionalWrite(project: Project, mod: SkillMod, entries: LockEntry[
     throw cause;
   }
 }
-export async function addDependency(project: Project, ref: string, options: { name?: string | undefined; only?: string[] | undefined; exclude?: string[] | undefined; cache?: string | undefined } = {}) {
-  const parsed = parseRef(ref);
+export async function addDependency(project: Project, input: string, options: { name?: string | undefined; only?: string[] | undefined; exclude?: string[] | undefined; cache?: string | undefined } = {}) {
   if (options.only?.length && options.exclude?.length) fail("add cannot mix --only and --exclude", "Choose one selector mode.");
-  const alias = options.name;
-  const name = alias ?? parsed.identity;
-  const mode = options.only?.length ? "only" : options.exclude?.length ? "exclude" : undefined;
-  const selectors = options.only ?? options.exclude ?? [];
-  const existing = project.mod.requires.find((requirement) => requirement.name === name || parseRef(requirement.ref).identity === parsed.identity);
-  if (existing && (existing.ref !== ref || !sameSelectors(existing, mode, selectors) || existing.name !== name)) fail(`dependency ${name} conflicts with an existing require`, "Use the existing alias and exact selector set, or edit skill.mod deliberately before retrying.");
-  const requirement = existing ?? { ref, alias, name, mode, selectors: [...selectors], comments: [] };
+  const named = project.mod.requires.find((requirement) => requirement.name === input);
+  const parsedInput = parseRef(named?.ref ?? input);
+  const identified = project.mod.requires.find((requirement) => parseRef(requirement.ref).identity === parsedInput.identity);
+  const existing = named ?? identified;
+  const omittedGitHubVersion = input.startsWith("github:") && !input.includes("@");
+  const ref = existing && (named !== undefined || omittedGitHubVersion) ? existing.ref : parsedInput.ref;
+  const parsed = ref === parsedInput.ref ? parsedInput : parseRef(ref);
+  const suppliedMode = options.only !== undefined ? "only" : options.exclude !== undefined ? "exclude" : undefined;
+  const suppliedSelectors = options.only ?? options.exclude ?? [];
+  const suppliedSelection = options.only !== undefined || options.exclude !== undefined;
+  if (existing && (existing.ref !== ref
+    || (options.name !== undefined && existing.name !== options.name)
+    || (suppliedSelection && !sameSelectors(existing, suppliedMode, suppliedSelectors)))) {
+    fail(`dependency ${existing.name} conflicts with the supplied add details`, "Omit version, --name, and selector flags to use skill.mod, or make supplied values match its require.");
+  }
+  const name = existing?.name ?? options.name ?? inferredDependencyName(parsed);
+  const requirement = existing ?? { ref, alias: options.name ?? name, name, mode: suppliedMode, selectors: [...suppliedSelectors], comments: [] };
   const mod = structuredClone(project.mod);
   if (!existing) mod.requires.push(requirement);
-  if (parsed.type === "path") { writeFileSync(project.modPath, formatMod(mod)); return { requirement, entry: null }; }
+  if (parsed.type === "path") { effectiveRoot(project, requirement, project.root); writeFileSync(project.modPath, formatMod(mod)); return { requirement, entry: null }; }
   const entry = await resolveAndFetch(name, ref, options.cache);
   const oldEntries = readLock(project.root, false).filter((candidate) => candidate.name !== name);
   transactionalWrite(project, mod, [...oldEntries, entry]);
   return { requirement, entry };
 }
-export async function fetchDependencies(project: Project, cache?: string, overridden = new Set<string>()) {
-  const entries = validateLock(project.mod, readLock(project.root), overridden);
-  for (const entry of entries) await fetchEntry(entry, cache);
-  return entries;
+export async function fetchDependencies(project: Project, names: string[] = [], cache?: string) {
+  const selectedNames = [...new Set(names)];
+  const hasRemote = project.mod.requires.some((requirement) => !requirement.ref.startsWith("path:"));
+  const entries = readLock(project.root, selectedNames.length === 0 && hasRemote);
+  let selected: LockEntry[];
+  if (selectedNames.length === 0) {
+    selected = validateLock(project.mod, entries);
+  } else {
+    const byName = new Map(entries.map((entry) => [entry.name, entry]));
+    selected = selectedNames.map((name) => {
+      const requirement = project.mod.requires.find((candidate) => candidate.name === name);
+      if (!requirement) fail(`unknown dependency ${name}`, "Choose a dependency declared in skill.mod.");
+      if (requirement.ref.startsWith("path:")) fail(`path dependency ${name} has no pin to fetch`, "Use the local tree directly.");
+      const entry = byName.get(name);
+      if (!entry) fail(`dependency ${name} is declared but not locked`, `Run skillful update ${name}.`);
+      if (entry.ref !== requirement.ref) fail(`dependency ${name} changed from locked ref ${entry.ref} to ${requirement.ref}`, `Run skillful update ${name} to move the pin.`);
+      return entry;
+    });
+  }
+  for (const entry of selected) await fetchEntry(entry, cache);
+  return selected;
 }
-export async function updateDependencies(project: Project, names: string[], cache?: string, overridden = new Set<string>()) {
-  const entries = validateLock(project.mod, readLock(project.root), overridden);
-  const selected = names.length ? new Set(names) : new Set(entries.map((entry) => entry.name));
-  for (const name of selected) if (!entries.some((entry) => entry.name === name)) fail(`unknown locked dependency ${name}`, "Run skillful list skills or inspect skill.lock for valid names.");
-  const next: LockEntry[] = [];
-  for (const entry of entries) next.push(selected.has(entry.name) ? await resolveAndFetch(entry.name, entry.ref, cache) : entry);
+
+export async function updateDependencies(project: Project, names: string[], cache?: string) {
+  const selectedNames = [...new Set(names)];
+  const remote = project.mod.requires.filter((requirement) => !requirement.ref.startsWith("path:"));
+  const selected = selectedNames.length === 0 ? remote : selectedNames.map((name) => {
+    const requirement = project.mod.requires.find((candidate) => candidate.name === name);
+    if (!requirement) fail(`unknown dependency ${name}`, "Choose a dependency declared in skill.mod.");
+    if (requirement.ref.startsWith("path:")) fail(`path dependency ${name} has no pin to update`, "Edit the local tree directly.");
+    return requirement;
+  });
+  const existing = readLock(project.root, false);
+  const refreshed: LockEntry[] = [];
+  for (const requirement of selected) refreshed.push(await resolveAndFetch(requirement.name, requirement.ref, cache));
+  const selectedSet = new Set(selected.map((requirement) => requirement.name));
+  const next = [...(selectedNames.length === 0 ? [] : existing.filter((entry) => !selectedSet.has(entry.name))), ...refreshed];
   writeLockAtomic(project.root, next);
   return next;
 }

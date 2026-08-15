@@ -37,7 +37,7 @@ From a Nix flake, the same binary is `inputs.skillful.packages.${system}.skillfu
 ```sh
 skillful init --dir ./agent
 cd ./agent
-skillful add github:owner/repo@main --name alias --only skill-name
+skillful add github:owner/repo
 skillful list skills
 skillful inspect skill-name
 skillful render --dry-run

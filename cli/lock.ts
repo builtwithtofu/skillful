@@ -43,20 +43,20 @@ export function readLock(projectRoot: string, required = true) {
   const path = join(projectRoot, "skill.lock");
   if (!existsSync(path)) {
     if (!required) return [];
-    fail(`missing skill.lock in ${projectRoot}`, "Run skillful add for a new dependency, or skillful fetch in an existing checkout.");
+    fail(`missing skill.lock in ${projectRoot}`, "Run skillful update to create pins, or restore skill.lock in an existing checkout.");
   }
   return parseLock(readFileSync(path, "utf8"), path);
 }
-export function validateLock(mod: SkillMod, entries: LockEntry[], overridden = new Set<string>()) {
-  const remote = mod.requires.filter((requirement) => !requirement.ref.startsWith("path:") && !overridden.has(requirement.name));
+export function validateLock(mod: SkillMod, entries: LockEntry[]) {
+  const remote = mod.requires.filter((requirement) => !requirement.ref.startsWith("path:"));
   const byName = new Map(entries.map((entry) => [entry.name, entry]));
   for (const requirement of remote) {
     const entry = byName.get(requirement.name);
-    if (!entry) fail(`dependency ${requirement.name} is declared but not locked`, `Run skillful add ${requirement.ref} --name ${requirement.name}, or skillful update ${requirement.name}.`);
+    if (!entry) fail(`dependency ${requirement.name} is declared but not locked`, `Run skillful update ${requirement.name} to lock its existing require.`);
     if (entry.ref !== requirement.ref) fail(`dependency ${requirement.name} changed from locked ref ${entry.ref} to ${requirement.ref}`, `Run skillful update ${requirement.name} to deliberately move the pin.`);
   }
   const declared = new Set(remote.map((requirement) => requirement.name));
-  for (const entry of entries) if (!declared.has(entry.name) && !overridden.has(entry.name)) fail(`lock contains undeclared dependency ${entry.name}`, "Remove the stale line through skillful update after checking skill.mod.");
+  for (const entry of entries) if (!declared.has(entry.name)) fail(`lock contains undeclared dependency ${entry.name}`, "Remove the stale line through skillful update after checking skill.mod.");
   return entries;
 }
 export function writeLockAtomic(projectRoot: string, entries: LockEntry[]) {
