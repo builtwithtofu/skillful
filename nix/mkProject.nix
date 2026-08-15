@@ -13,6 +13,7 @@ let
     if builtins.typeOf value == "path"
     then builtins.path { path = value; name = "skillful-${name}"; }
     else value;
+  projectSource = storePath "project" src;
   harnessDir = ../harnesses;
   harnessFiles = builtins.attrNames (lib.filterAttrs (name: type: type == "regular" && lib.hasSuffix ".json" name) (builtins.readDir harnessDir));
   facts = builtins.listToAttrs (map (file:
@@ -32,7 +33,7 @@ let
       then throw "skillful extra command roots require non-empty origin and src"
       else entry) (extraRoots.commands or [ ]);
   };
-  lockPath = src + "/skill.lock";
+  lockPath = projectSource + "/skill.lock";
   lockEntries =
     if !(builtins.pathExists lockPath)
     then [ ]
@@ -97,12 +98,12 @@ let
   };
   extraArgs = lib.concatMap (entry: [ "--extra-skill-root" "${entry.origin}=${toString entry.src}" ]) normalizedExtraRoots.skills
     ++ lib.concatMap (entry: [ "--extra-command-root" "${entry.origin}=${toString entry.src}" ]) normalizedExtraRoots.commands;
-  projectArgs = [ "--project" (toString src) ] ++ overrideArgs ++ extraArgs;
+  projectArgs = [ "--project" (toString projectSource) ] ++ overrideArgs ++ extraArgs;
   escapedProjectArgs = lib.escapeShellArgs projectArgs;
   escapedOverrideArgs = lib.escapeShellArgs overrideArgs;
   rendered = pkgs.runCommandLocal "skillful-project-render" {
     nativeBuildInputs = [ engineCli ];
-    projectSource = src;
+    inherit projectSource;
     dependencySources = builtins.attrValues resolvedOverrides;
     extraRootSources = map (entry: entry.src) (normalizedExtraRoots.skills ++ normalizedExtraRoots.commands);
   } ''
@@ -138,8 +139,8 @@ let
       if [[ $# -gt 0 ]]; then shift; fi
       case "$command" in
         init|--help|-h|help|"") exec ${engineCli}/bin/skillful "$command" "$@" ;;
-        fmt|add) exec ${engineCli}/bin/skillful "$command" "$@" --project ${lib.escapeShellArg (toString src)} ;;
-        fetch|update) exec ${engineCli}/bin/skillful "$command" "$@" --project ${lib.escapeShellArg (toString src)} ${escapedOverrideArgs} ;;
+        fmt|add) exec ${engineCli}/bin/skillful "$command" "$@" --project ${lib.escapeShellArg (toString projectSource)} ;;
+        fetch|update) exec ${engineCli}/bin/skillful "$command" "$@" --project ${lib.escapeShellArg (toString projectSource)} ${escapedOverrideArgs} ;;
         *) exec ${engineCli}/bin/skillful "$command" "$@" ${escapedProjectArgs} ;;
       esac
     '';
