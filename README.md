@@ -58,7 +58,8 @@ Nix reads `skill.lock`, fetches those exact pins with `fetchTree`, and runs
 ```nix
 project = inputs.skillful.lib.mkProject {
   inherit pkgs;
-  src = ./agent;
+  src = ./.;
+  projectDir = "agent";
   dependencyOverrides.shared = pkgs.shared-skills;
   extraRoots.skills = [ { origin = "workstation"; src = ./host-skills; } ];
 };
@@ -67,8 +68,16 @@ pi = project.forHarness "pi";
 # pi = { installPaths; skills; commands; rules; }
 ```
 
-`dependencyOverrides` satisfy a declared require from a local package.
-`extraRoots` add named host content without editing `skill.mod`.
+`projectDir` selects the directory containing `skill.mod` within `src`. This lets
+`path:../shared/skills` dependencies use sibling trees from the same source
+workspace. `dependencyOverrides` substitute a declared, locked remote while
+rendering; they never replace its fallback lock. `extraRoots` add named host
+content without editing `skill.mod`.
+
+`project.cli` uses the working project discovered from the current directory for
+`fmt`, `add`, `fetch`, and `update`; pass `--project DIR` when working elsewhere.
+Understand and deliver commands use the pinned Nix project with its overrides and
+extra roots. This keeps lock maintenance writable without changing built renders.
 
 ## Development
 

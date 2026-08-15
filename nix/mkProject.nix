@@ -2,6 +2,7 @@
 {
   pkgs,
   src,
+  projectDir ? ".",
   dependencyOverrides ? { },
   extraRoots ? { },
 }:
@@ -14,6 +15,7 @@ let
     then builtins.path { path = value; name = "skillful-${name}"; }
     else value;
   projectSource = storePath "project" src;
+  projectRoot = projectSource + "/${projectDir}";
   harnessDir = ../harnesses;
   harnessFiles = builtins.attrNames (lib.filterAttrs (name: type: type == "regular" && lib.hasSuffix ".json" name) (builtins.readDir harnessDir));
   facts = builtins.listToAttrs (map (file:
@@ -33,7 +35,7 @@ let
       then throw "skillful extra command roots require non-empty origin and src"
       else entry) (extraRoots.commands or [ ]);
   };
-  lockPath = projectSource + "/skill.lock";
+  lockPath = projectRoot + "/skill.lock";
   lockEntries =
     if !(builtins.pathExists lockPath)
     then [ ]
@@ -98,12 +100,11 @@ let
   };
   extraArgs = lib.concatMap (entry: [ "--extra-skill-root" "${entry.origin}=${toString entry.src}" ]) normalizedExtraRoots.skills
     ++ lib.concatMap (entry: [ "--extra-command-root" "${entry.origin}=${toString entry.src}" ]) normalizedExtraRoots.commands;
-  projectArgs = [ "--project" (toString projectSource) ] ++ overrideArgs ++ extraArgs;
+  projectArgs = [ "--project" (toString projectRoot) "--source-root" (toString projectSource) ] ++ overrideArgs ++ extraArgs;
   escapedProjectArgs = lib.escapeShellArgs projectArgs;
-  escapedOverrideArgs = lib.escapeShellArgs overrideArgs;
   rendered = pkgs.runCommandLocal "skillful-project-render" {
     nativeBuildInputs = [ engineCli ];
-    inherit projectSource;
+    inherit projectSource projectRoot;
     dependencySources = builtins.attrValues resolvedOverrides;
     extraRootSources = map (entry: entry.src) (normalizedExtraRoots.skills ++ normalizedExtraRoots.commands);
   } ''
@@ -111,7 +112,7 @@ let
     export XDG_CACHE_HOME="$TMPDIR/cache"
     export XDG_STATE_HOME="$TMPDIR/state"
     mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
-    skillful render --project "$projectSource" --out "$TMPDIR/rendered" ${lib.escapeShellArgs (overrideArgs ++ extraArgs)}
+    skillful render --project "$projectRoot" --source-root "$projectSource" --out "$TMPDIR/rendered" ${lib.escapeShellArgs (overrideArgs ++ extraArgs)}
     cp -r "$TMPDIR/rendered" "$out"
   '';
   splitDirectory = harness: category:
