@@ -68,13 +68,17 @@
             test -f "$TMPDIR/rendered/pi/skills/example/SKILL.md"
             touch "$out"
           '';
-          source-maintenance = pkgs.runCommandLocal "skillful-source-maintenance-check" {
+          source-maintenance = pkgs.runCommand "skillful-source-maintenance-check" {
             nativeBuildInputs = [ sourceMaintenanceFixture.cli pkgs.gitMinimal pkgs.gnutar ];
           } ''
             export HOME="$TMPDIR/home"
             export XDG_CACHE_HOME="$TMPDIR/cache"
             mkdir -p "$HOME" "$XDG_CACHE_HOME" "$out"
+            test -f ${sourceMaintenanceFixture.rendered}/pi/skills/agent-jj/SKILL.md
+            test -f ${sourceMaintenanceFixture.rendered}/pi/skills/local/SKILL.md
             test -f ${(sourceMaintenanceFixture.forHarness "pi").skills}/agent-jj/SKILL.md
+            test -f ${(sourceMaintenanceFixture.forHarness "pi").rules}
+            test -f ${sourceMaintenanceFixture.contract}/contract.json
 
             remote="$TMPDIR/remote"
             mkdir -p "$remote/angular/angular-skill" "$remote/browser/agent-browser"
@@ -114,9 +118,25 @@
             cmp "$TMPDIR/lock.before" "$work/skill.lock"
             ${skillful}/bin/skillful check --strict --format json --project "$work" --source-root "$workspace" > "$out/pinned-check.json"
           '';
-          fixture-render = fixture.checks.render;
+          fixture-render = fixture.rendered;
+          fixture-harness = pkgs.runCommand "skillful-fixture-harness-check" { } ''
+            test -f ${fixture.rendered}/pi/skills/example/SKILL.md
+            test -f ${fixture.rendered}/claude/skills/example/SKILL.md
+            test -f ${fixture.rendered}/opencode/skills/example/SKILL.md
+            test -f ${fixture.rendered}/opencode-v2/skills/example/SKILL.md
+            test -f ${(fixture.forHarness "pi").skills}/example/SKILL.md
+            test -f ${(fixture.forHarness "pi").commands}/standalone.md
+            test -f ${(fixture.forHarness "pi").rules}
+            test -f ${fixture.contract}/contract.json
+            touch "$out"
+          '';
           fixture-strict = fixture.checks.strict;
-          locked-render = lockedFixture.checks.render;
+          locked-render = pkgs.runCommand "skillful-locked-render-check" { } ''
+            test -f ${lockedFixture.rendered}/pi/skills/local/SKILL.md
+            test -f ${lockedFixture.rendered}/pi/skills/angular-developer/SKILL.md
+            test -f ${(lockedFixture.forHarness "pi").skills}/angular-developer/SKILL.md
+            touch "$out"
+          '';
           github-transport = pkgs.runCommand "skillful-github-transport" {
             nativeBuildInputs = [ pkgs.bun pkgs.gnutar pkgs.cacert ];
             outputHashAlgo = "sha256";

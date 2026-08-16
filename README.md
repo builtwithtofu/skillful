@@ -53,7 +53,8 @@ Inspection, check, render, and install never resolve.
 ## Use Nix
 
 Nix reads `skill.lock`, fetches those exact pins with `fetchTree`, and runs
-`skillful render` with no network. No import-from-derivation.
+`skillful render` with no network. No import-from-derivation. Command meaning
+stays in `skillful --help` and `skillful skills tree`.
 
 ```nix
 project = inputs.skillful.lib.mkProject {
@@ -64,9 +65,27 @@ project = inputs.skillful.lib.mkProject {
   extraRoots.skills = [ { origin = "workstation"; src = ./host-skills; } ];
 };
 
+packages.${system} = {
+  default = project.rendered;
+  skillful = project.cli;
+};
+
+checks.${system} = project.checks;
+
 pi = project.forHarness "pi";
 # pi = { installPaths; skills; commands; rules; }
 ```
+
+```sh
+nix build
+nix flake check
+nix run .#skillful -- update
+nix run .#skillful -- update angular
+```
+
+`nix build` is the complete render. Each harness view is a path inside it.
+`nix run .#skillful -- update` writes `skill.lock` through the Skillful CLI.
+`nix flake update` does not move skill pins.
 
 `projectDir` selects the directory containing `skill.mod` within `src`. This lets
 `path:../shared/skills` dependencies use sibling trees from the same source
