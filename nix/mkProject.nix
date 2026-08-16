@@ -102,7 +102,7 @@ let
     ++ lib.concatMap (entry: [ "--extra-command-root" "${entry.origin}=${toString entry.src}" ]) normalizedExtraRoots.commands;
   projectArgs = [ "--project" (toString projectRoot) "--source-root" (toString projectSource) ] ++ overrideArgs ++ extraArgs;
   escapedProjectArgs = lib.escapeShellArgs projectArgs;
-  rendered = pkgs.runCommandLocal "skillful-project-render" {
+  rendered = pkgs.runCommand "skillful-project-render" {
     nativeBuildInputs = [ engineCli ];
     inherit projectSource projectRoot;
     dependencySources = builtins.attrValues resolvedOverrides;
@@ -115,22 +115,14 @@ let
     skillful render --project "$projectRoot" --source-root "$projectSource" --out "$TMPDIR/rendered" ${lib.escapeShellArgs (overrideArgs ++ extraArgs)}
     cp -r "$TMPDIR/rendered" "$out"
   '';
-  splitDirectory = harness: category:
-    pkgs.runCommandLocal "skillful-${category}-${harness}" { } ''
-      cp -r ${rendered}/${harness}/${category} "$out"
-    '';
-  splitRules = harness:
-    pkgs.runCommandLocal "skillful-rules-${harness}.md" { } ''
-      cp ${rendered}/${harness}/rules.md "$out"
-    '';
   forHarness = name:
     if !(builtins.hasAttr name facts)
     then throw "unknown skillful harness ${name}; known: ${lib.concatStringsSep ", " harnesses}"
     else {
       installPaths = facts.${name}.installPaths;
-      skills = splitDirectory name "skills";
-      commands = splitDirectory name "commands";
-      rules = splitRules name;
+      skills = "${rendered}/${name}/skills";
+      commands = "${rendered}/${name}/commands";
+      rules = "${rendered}/${name}/rules.md";
     };
   cli = pkgs.writeShellApplication {
     name = "skillful";
@@ -142,18 +134,15 @@ let
       esac
     '';
   };
-  contract = pkgs.runCommandLocal "skillful-project-contract" { } ''
-    mkdir -p "$out"
-    cp ${rendered}/pi/.skillful/contract.json "$out/contract.json"
-  '';
+  contract = "${rendered}/pi/.skillful";
   checks = {
     render = rendered;
-    strict = pkgs.runCommandLocal "skillful-project-strict-check" { nativeBuildInputs = [ cli ]; } ''
+    strict = pkgs.runCommand "skillful-project-strict-check" { nativeBuildInputs = [ cli ]; } ''
       skillful check --strict --format json > "$out"
     '';
   };
 in
 {
-  inherit harnesses forHarness cli contract checks;
+  inherit harnesses forHarness cli contract checks rendered;
   installPaths = builtins.mapAttrs (_: value: value.installPaths) facts;
 }

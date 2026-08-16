@@ -1,3 +1,4 @@
 node_modules/
 rendered/
 dist/
+.ari/
