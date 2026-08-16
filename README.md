@@ -31,6 +31,8 @@ bun run build
 ```
 
 From a Nix flake, the same binary is `inputs.skillful.packages.${system}.skillful`.
+The Nix package follows `package.json` and `bun.lock`. Skill commands stay in
+`skillful --help` and `skillful skills tree`.
 
 ## Use the CLI
 
