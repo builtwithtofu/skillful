@@ -22,6 +22,34 @@ describe("project CLI", () => {
     expect(stdout).toContain("render [options]");
     expect(stdout).toContain("install [options]");
     expect(stdout.toLowerCase()).not.toContain("nix");
+
+    const formatHelp = run(temp(), "list", "--help");
+    expect(formatHelp.exitCode).toBe(0);
+    expect(output(formatHelp).stdout).toContain("default: text");
+    expect(output(formatHelp).stdout).not.toContain('default: "text"');
+  });
+  test("no-args help orients without treating help as a usage error", () => {
+    const result = run(temp());
+    const { stdout, stderr } = output(result);
+    expect(result.exitCode).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("Author agent skills once, render them per harness.");
+    expect(stderr).toContain("skillful skills tree");
+    expect(stderr).not.toContain("(outputHelp)");
+    expect(stderr).not.toContain("Error:");
+  });
+
+  test("skills help is not a synonym command", () => {
+    const listed = run(temp(), "skills", "--help");
+    expect(listed.exitCode).toBe(0);
+    expect(output(listed).stdout).toContain("skillful skills tree");
+    expect(output(listed).stdout).not.toContain("help [command]");
+
+    const synonym = run(temp(), "skills", "help");
+    const { stdout, stderr } = output(synonym);
+    expect(synonym.exitCode).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("Error: unknown command 'help'\nRecovery: Run `skillful --help` or `skillful <command> --help`.\n");
   });
 
   test("skills tree lists legal topic names and show loads that topic", () => {
@@ -77,9 +105,18 @@ describe("project CLI", () => {
 
   test("unknown command options are usage errors", () => {
     const root = temp();
-    const result = run(root, "fmt", "--harness", "pi");
-    expect(result.exitCode).toBe(2);
-    expect(output(result).stderr).toContain("unknown option");
+    const unknown = run(root, "fmt", "--harness", "pi");
+    expect(unknown.exitCode).toBe(2);
+    expect(output(unknown).stderr).toBe("Error: unknown option '--harness'\nRecovery: Run `skillful --help` or `skillful <command> --help`.\n");
+
+    const excess = run(root, "manifest", "extra", "args");
+    expect(excess.exitCode).toBe(2);
+    expect(output(excess).stderr).toBe("Error: too many arguments for 'manifest'. Expected 0 arguments but got 2: extra, args.\nRecovery: Run `skillful --help` or `skillful <command> --help`.\n");
+
+    const json = run(root, "list", "skills", "--format", "json", "--nope");
+    expect(json.exitCode).toBe(2);
+    expect(output(json).stdout).toBe(`${JSON.stringify({ schemaVersion: 1, error: { code: "usage", message: "unknown option '--nope'", hint: "Run `skillful --help` or `skillful <command> --help`." } })}\n`);
+    expect(output(json).stderr).toBe("");
   });
 
   test.skipIf(process.platform === "win32")("runtime failures without a recovery hint remain structured JSON errors", () => {
