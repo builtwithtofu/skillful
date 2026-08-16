@@ -84,7 +84,7 @@ function addSourceOptions(command: Command, withHarness = true) {
   command.addOption(new Option("--project <directory>", "project directory").argParser(collect));
   command.addOption(internalRootOption("--source-root <directory>", "source workspace containing the project"));
   if (withHarness) command.addOption(new Option("--harness <harness>", "select a harness; repeatable").argParser(collect));
-  command.addOption(new Option("--format <format>", "output format").choices(["text", "json"]).default("text"));
+  command.addOption(new Option("--format <format>", "output format").choices(["text", "json"]).default("text", "text"));
   command.addOption(new Option("--override <name=path>", "satisfy a declared dependency locally; repeatable").argParser(collect));
   command.addOption(internalRootOption("--extra-skill-root <origin=path>", "internal named skill root"));
   command.addOption(internalRootOption("--extra-command-root <origin=path>", "internal named command root"));
@@ -116,7 +116,8 @@ export function createProgram() {
     .addHelpText("after", ROOT_AFTER_HELP)
     .helpCommand(false)
     .allowExcessArguments(false)
-    .exitOverride();
+    .exitOverride()
+    .configureOutput({ outputError: () => {} });
 
   program.commandsGroup("Project:");
   program.command("init")
@@ -284,7 +285,8 @@ export function createProgram() {
   const skills = program.command("skills")
     .summary("Print the agent topic map, or one guide")
     .description("Print the agent topic map, or load one guide. Topics are exact names from the tree.")
-    .addHelpText("after", SKILLS_AFTER_HELP);
+    .addHelpText("after", SKILLS_AFTER_HELP)
+    .helpCommand(false);
   skills.command("tree")
     .description("Print the legal topic names")
     .action(() => { process.stdout.write(skillTree()); });
@@ -300,7 +302,10 @@ export async function main(argv = Bun.argv.slice(2)) {
   try { await createProgram().parseAsync(argv, { from: "user" }); }
   catch (error) {
     if (error instanceof CommanderError) {
-      if (error.code === "commander.helpDisplayed" || error.code === "commander.version") return;
+      if (error.exitCode === 0 || error.code === "commander.help") {
+        process.exitCode = error.exitCode;
+        return;
+      }
       const message = error.message.replace(/^error:\s*/i, "");
       const hint = "Run `skillful --help` or `skillful <command> --help`.";
       if (json) console.log(JSON.stringify({ schemaVersion: 1, error: { code: "usage", message, hint } }));
