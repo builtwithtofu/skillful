@@ -1,5 +1,5 @@
 {
-  "name": "@aledsdavies/skillful",
+  "name": "@builtwithtofu/skillful",
   "version": "0.1.0",
   "description": "Author agent skills once, render them per harness",
   "type": "module",
@@ -24,7 +24,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aledsdavies/skillful.git"
+    "url": "git+https://github.com/builtwithtofu/skillful.git"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",
