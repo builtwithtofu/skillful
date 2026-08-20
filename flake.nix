@@ -72,6 +72,7 @@
           overlappingSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "overlap") true);
           nestedOverlappingSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "nested-overlap") true);
           rootWideSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "root-wide") true);
+          unsupportedCommandSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "unsupported-command") true);
           setupSourcesInsideRender = setup: builtins.all (file: pkgs.lib.hasPrefix "${setup.rendered}/" (toString file.source)) (builtins.attrValues setup.files);
           lockedFixture = mkProject { inherit pkgs; src = ./tests/fixtures/locked-project; };
           sourceMaintenanceFixture = mkProject {
@@ -175,6 +176,7 @@
             assert !overlappingSetup.success;
             assert !nestedOverlappingSetup.success;
             assert !rootWideSetup.success;
+            assert !unsupportedCommandSetup.success;
             assert setupSourcesInsideRender personalSetup;
             assert setupSourcesInsideRender workSetup;
             pkgs.runCommand "skillful-setup-projection-check" {

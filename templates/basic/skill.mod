@@ -8,6 +8,18 @@ harness claude (
   token audience "Claude Code"
 )
 
+harness codex (
+  token audience "Codex"
+)
+
+harness cursor (
+  token audience "Cursor"
+)
+
+harness grok (
+  token audience "Grok"
+)
+
 harness opencode (
   token audience "OpenCode"
 )

@@ -1,8 +1,8 @@
 # core
 
 Author skills, commands, and rules once. Skillful renders that one corpus for each
-harness: `claude`, `pi`, `opencode`. Git is how you pull other people's skill
-trees (`github:`, `git:`, `path:`).
+harness: `claude`, `codex`, `cursor`, `grok`, `opencode`, `pi`. Git is how you pull
+other people's skill trees (`github:`, `git:`, `path:`).
 
 Plain files are enough for a single harness. Use skillful when one tree must serve
 several harnesses, or when you compose another tree with your own.

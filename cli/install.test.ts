@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { installProject } from "./install.ts";
+import { installProject, pathConflict } from "./install.ts";
 import { discoverProject } from "./project.ts";
 import { copyBasicFixture } from "./test-fixture.ts";
 
@@ -35,6 +35,43 @@ describe("safe installation", () => {
     expect(existsSync(join(home, ".pi", "agent", "AGENTS.md"))).toBe(true);
     expect(existsSync(first.statePath)).toBe(true);
     expect(installProject(resolved, { harness: "pi", root: home, stateHome: state }).changes).toEqual([]);
+  });
+
+  test("matches destination aliases using the filesystem's case rules", () => {
+    expect(pathConflict("Shared/skills", "shared/skills", false)).toBe(false);
+    expect(pathConflict("Shared/skills", "shared/skills", true)).toBe(true);
+  });
+
+  test("installs Codex skills without a command destination", () => {
+    const { project, home, state } = fixture();
+    installProject(discoverProject({ project }), { harness: "codex", root: home, stateHome: state });
+
+    expect(existsSync(join(home, ".agents", "skills", "example", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".agents", "skills", "standalone", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".codex", "AGENTS.md"))).toBe(true);
+    expect(existsSync(join(home, ".codex", "prompts"))).toBe(false);
+  });
+
+  test("installs Cursor commands as manual skills without inventing global rules", () => {
+    const { project, home, otherHome, state } = fixture();
+    installProject(discoverProject({ project }), { harness: "cursor", root: home, stateHome: state });
+
+    expect(existsSync(join(home, ".cursor", "skills", "example", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".cursor", "skills", "standalone", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".cursor", "commands"))).toBe(false);
+    expect(existsSync(join(home, "AGENTS.md"))).toBe(false);
+
+    installProject(discoverProject({ project }), { harness: "cursor", root: otherHome, stateHome: state, paths: { rules: "AGENTS.md" } });
+    expect(existsSync(join(otherHome, "AGENTS.md"))).toBe(true);
+  });
+
+  test("installs Grok skills, commands, and rules", () => {
+    const { project, home, state } = fixture();
+    installProject(discoverProject({ project }), { harness: "grok", root: home, stateHome: state });
+
+    expect(existsSync(join(home, ".grok", "skills", "example", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".grok", "commands", "standalone.md"))).toBe(true);
+    expect(existsSync(join(home, ".grok", "AGENTS.md"))).toBe(true);
   });
 
   test("removes stale owned files without touching another destination root", () => {
@@ -91,6 +128,22 @@ describe("safe installation", () => {
       paths: { skills: "real", commands: "commands", rules: "alias/example/SKILL.md" },
     })).toThrow("overlapping physical installation destinations");
     expect(existsSync(join(home, "real", "example", "SKILL.md"))).toBe(false);
+  });
+
+  test.skipIf(process.platform === "win32")("rejects a new path that aliases a stale receipt path", () => {
+    const { project, home, state } = fixture();
+    const resolved = discoverProject({ project });
+    installProject(resolved, { harness: "pi", root: home, stateHome: state });
+    symlinkSync(join(home, ".pi", "agent"), join(home, "alias"));
+
+    expect(() => installProject(resolved, {
+      harness: "pi",
+      root: home,
+      stateHome: state,
+      force: true,
+      paths: { skills: "alias/skills", commands: "alias/prompts", rules: "alias/AGENTS.md" },
+    })).toThrow("aliases a stale owned path");
+    expect(existsSync(join(home, ".pi", "agent", "skills", "example", "SKILL.md"))).toBe(true);
   });
 
 
@@ -163,6 +216,8 @@ describe("safe installation", () => {
     expect(existsSync(retiredStatePath)).toBe(true);
     expect(existsSync(join(home, retiredPaths.skills, "example", "SKILL.md"))).toBe(true);
     expect(existsSync(join(home, ".config/opencode/skills/example/SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".config/opencode/commands/standalone.md"))).toBe(true);
+    expect(existsSync(join(home, ".config/opencode/command"))).toBe(false);
     expect(existsSync(defaultInstall.statePath)).toBe(true);
 
     const paths = { skills: retiredPaths.skills, commands: retiredPaths.commands };

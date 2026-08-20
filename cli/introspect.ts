@@ -13,7 +13,7 @@ function selectedHarnesses(plan: ReturnType<typeof resolvePlan>, harnesses?: Har
 function emit(value: unknown, format: OutputFormat, text: () => string) { console.log(format === "json" ? JSON.stringify(value, null, 2) : text()); }
 function publicSkill(skill: ReturnType<typeof resolvePlan>["harnesses"][HarnessId]["skills"][number], rendered: boolean) {
   const { sourceDir: _sourceDir, ...value } = skill;
-  const supportFiles = value.supportFiles.map(({ sourcePath: _sourcePath, relativePath: _relativePath, ...support }) => support);
+  const supportFiles = value.supportFiles.map(({ sourcePath: _sourcePath, generatedBody: _generatedBody, relativePath: _relativePath, ...support }) => support);
   return rendered ? { ...value, supportFiles } : { ...value, supportFiles, body: undefined, command: { ...value.command, body: undefined } };
 }
 export function manifestCommand(project: Project, options: ResolveOptions & { harnesses?: HarnessId[] | undefined; format: OutputFormat }) {

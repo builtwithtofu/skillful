@@ -1,6 +1,9 @@
 {
   "name": "pi",
-  "installPaths": { "skills": ".pi/agent/skills", "commands": ".pi/agent/prompts", "rules": ".pi/agent/AGENTS.md" },
+  "installPaths": {
+    "home": { "skills": ".pi/agent/skills", "commands": ".pi/agent/prompts", "rules": ".pi/agent/AGENTS.md" },
+    "project": { "skills": ".pi/agent/skills", "commands": ".pi/agent/prompts", "rules": ".pi/agent/AGENTS.md" }
+  },
   "argSyntax": "$@",
   "skillFrontmatter": ["name", "description", "license", "compatibility", "metadata", "allowed-tools", "disable-model-invocation"],
   "commandFrontmatter": ["description", "argument-hint"],

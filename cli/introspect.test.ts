@@ -26,7 +26,7 @@ describe("top-level introspection", () => {
 
     const listedHarnesses = run(project, "list", "harnesses");
     expect(listedHarnesses.exitCode).toBe(0);
-    expect(stdout(listedHarnesses)).toBe("claude\nopencode\npi\n");
+    expect(stdout(listedHarnesses)).toBe("claude\ncodex\ncursor\ngrok\nopencode\npi\n");
 
     const inspected = run(project, "inspect", "example", "--harness", "pi", "--rendered", "--format", "json");
     expect(inspected.exitCode).toBe(0);
@@ -37,11 +37,16 @@ describe("top-level introspection", () => {
     expect(json(checked).ok).toBe(true);
 
     const manifest = json(run(project, "manifest", "--harness", "claude", "--format", "json"));
+    expect(manifest.schemaVersion).toBe(1);
     expect(Object.keys(manifest.harnesses)).toEqual(["claude"]);
     expect(manifest.harnesses.claude.assets).toEqual([]);
 
     const schema = json(run(project, "schema", "--format", "json"));
+    expect(schema.schemaVersion).toBe(1);
     expect(schema.schema.harnesses.opencode.commandMerge).toBe("file");
+    expect(schema.schema.harnesses.codex.commandMerge).toBe("skill");
+    expect(schema.schema.harnesses.cursor.commandMerge).toBe("skill");
+    expect(schema.schema.harnesses.grok.commandMerge).toBe("inject");
 
     const compared = json(run(project, "diff", "example", "--format", "json"));
     expect(compared.harnesses.claude.status).toBe("identical");

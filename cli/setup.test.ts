@@ -50,6 +50,23 @@ describe("installation setups", () => {
     expect(work.files[".claude2/skills/example/SKILL.md"]?.harness).toBe("claude");
     expect(work.files[".pi/agent/skills/hidden/SKILL.md"]?.harness).toBe("pi");
   });
+
+  test("uses project discovery paths for project-root setups", () => {
+    const project = projectWith(`
+setup local (
+  root project
+  codex grok opencode
+)
+`);
+
+    const setup = resolveSetup(project, "local");
+    expect(setup.harnesses).toEqual([
+      { name: "codex", paths: { skills: ".agents/skills" } },
+      { name: "grok", paths: { skills: ".grok/skills", commands: ".grok/commands" } },
+      { name: "opencode", paths: { skills: ".opencode/skills", commands: ".opencode/commands" } },
+    ]);
+    expect(Object.keys(setup.files).some((path) => path.endsWith("AGENTS.md"))).toBe(false);
+  });
   test("installs every setup harness and converges a changed harness list", () => {
     const project = projectWith(declarations);
     const home = join(project.root, "home");

@@ -23,7 +23,7 @@ export function resolveSetup(project: Project, name: string, options: ResolveOpt
   const plan = resolvePlan(project, { ...options, setup: name });
   const setup = project.mod.setups[name]!;
   const facts = loadHarnesses();
-  const harnesses = setup.harnesses.map((harness) => ({ name: harness.id, paths: resolveInstallPaths(facts[harness.id], harness.paths) }));
+  const harnesses = setup.harnesses.map((harness) => ({ name: harness.id, paths: resolveInstallPaths(facts[harness.id], harness.paths, setup.root) }));
   const destinations = harnesses.flatMap((harness) => Object.values(harness.paths));
   for (const [index, left] of destinations.entries()) for (const right of destinations.slice(index + 1)) {
     if (pathConflict(left, right)) fail(`setup ${name} has overlapping destinations: ${left} and ${right}`, "Choose harness paths that do not share a destination region.");
@@ -38,7 +38,7 @@ export function resolveSetup(project: Project, name: string, options: ResolveOpt
       add(join(output.paths.skills, skill.name, "SKILL.md").replaceAll("\\", "/"), output.name, `${output.name}/skills/${skill.name}/SKILL.md`);
       for (const support of skill.supportFiles) add(join(output.paths.skills, skill.name, support.relativePath).replaceAll("\\", "/"), output.name, `${output.name}/skills/${skill.name}/${support.relativePath.replaceAll("\\", "/")}`);
     }
-    for (const command of harness.commands) add(join(output.paths.commands, command.name).replaceAll("\\", "/"), output.name, `${output.name}/commands/${command.name}`);
+    if (output.paths.commands) for (const command of harness.commands) add(join(output.paths.commands, command.name).replaceAll("\\", "/"), output.name, `${output.name}/commands/${command.name}`);
     if (output.paths.rules) add(output.paths.rules, output.name, `${output.name}/rules.md`);
   }
   return {

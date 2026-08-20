@@ -1,7 +1,7 @@
 export const ROOT_AFTER_HELP = `
 Skillful authors skills, commands, and rules once and renders them per harness
-(claude, pi, opencode). Git is the package manager for other people's skill
-trees: github:, git:, and path: references.
+(claude, codex, cursor, grok, opencode, pi). Git is the package manager for other
+people's skill trees: github:, git:, and path: references.
 
 Use skillful when one tree must serve several harnesses, or when you compose
 another tree with your own. Plain files are enough for a single harness.
@@ -102,10 +102,12 @@ Afterward:
 export const INSTALL_AFTER_HELP = `
 The only command that writes live harness destinations. Records exclusive
 ownership, refuses unmanaged or edited collisions, and removes only unchanged
-stale files. Use --path for a nonstandard layout. --remove retires a named setup
-from its receipt; pass --root after deleting its declaration. Removal rejects
---force because changed owned files always block. An OpenCode install at retired
-opencode-v2 paths adopts that receipt safely.
+stale files. Named setups select home or project paths from their declared root.
+One-off --harness installs always use home paths; --root only relocates them. Use
+--path for a nonstandard layout. --remove retires a named setup from its receipt;
+pass --root after deleting its declaration. Removal rejects --force because changed
+owned files always block. An OpenCode install at retired opencode-v2 paths adopts
+that receipt safely.
 
 Examples:
   skillful install work-mac --dry-run
@@ -116,7 +118,8 @@ Examples:
 
 export const SETUP_AFTER_HELP = `
 A setup declares selected skills, harness outputs, root kind, and path exceptions
-in skill.mod. Showing one is read-only.
+in skill.mod. Its root selects each harness's home or project paths. Showing one
+is read-only.
 
 Examples:
   skillful list setups

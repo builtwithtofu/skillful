@@ -1,0 +1,11 @@
+{
+  "name": "grok",
+  "installPaths": {
+    "home": { "skills": ".grok/skills", "commands": ".grok/commands", "rules": ".grok/AGENTS.md" },
+    "project": { "skills": ".grok/skills", "commands": ".grok/commands" }
+  },
+  "argSyntax": "$ARGUMENTS",
+  "skillFrontmatter": ["name", "description", "when-to-use", "paths", "allowed-tools", "argument-hint", "user-invocable", "disable-model-invocation", "model", "effort", "license", "compatibility", "metadata"],
+  "commandFrontmatter": ["description", "when-to-use", "allowed-tools", "argument-hint", "user-invocable", "disable-model-invocation", "model", "effort"],
+  "commandMerge": "inject"
+}

@@ -1,14 +1,11 @@
 import { posix } from "node:path";
 
-export const HARNESS_IDS = ["claude", "pi", "opencode"] as const;
+export const HARNESS_IDS = ["claude", "codex", "cursor", "grok", "opencode", "pi"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 export function mapHarnesses<T>(value: (id: HarnessId) => T): Record<HarnessId, T> {
-  return {
-    claude: value("claude"),
-    opencode: value("opencode"),
-    pi: value("pi"),
-  };
+  return Object.fromEntries(HARNESS_IDS.map((id) => [id, value(id)])) as Record<HarnessId, T>;
 }
+
 
 type Comments = string[];
 type WithComments<T> = T & { comments: Comments };

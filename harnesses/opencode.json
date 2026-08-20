@@ -1,6 +1,9 @@
 {
   "name": "opencode",
-  "installPaths": { "skills": ".config/opencode/skills", "commands": ".config/opencode/command", "rules": ".config/opencode/AGENTS.md" },
+  "installPaths": {
+    "home": { "skills": ".config/opencode/skills", "commands": ".config/opencode/commands", "rules": ".config/opencode/AGENTS.md" },
+    "project": { "skills": ".opencode/skills", "commands": ".opencode/commands" }
+  },
   "argSyntax": "$ARGUMENTS",
   "skillFrontmatter": ["name", "description", "license", "compatibility", "metadata"],
   "commandFrontmatter": ["description"],
