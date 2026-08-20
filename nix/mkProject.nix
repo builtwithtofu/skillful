@@ -8,6 +8,13 @@
 }:
 
 let
+  sourceContext = builtins.attrValues (builtins.getContext (toString src));
+  hasDerivationContext = pkgs.lib.any (entry: entry ? outputs || entry ? allOutputs) sourceContext;
+in
+if pkgs.lib.isDerivation src || hasDerivationContext
+then throw "skillful mkProject src must be a source path or flake input, not a derivation"
+else
+let
   lib = pkgs.lib;
   engineCli = self.packages.${pkgs.stdenv.hostPlatform.system}.skillful;
   storePath = name: value:

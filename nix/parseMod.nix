@@ -91,7 +91,7 @@ let
     else state // { current = state.current // {
       selection = {
         inherit mode;
-        skills = state.current.selection.skills ++ [ ({ name = checked; } // lib.optionalAttrs (reason != null) { inherit reason; }) ];
+        skills = state.current.selection.skills ++ [ ({ name = checked; } // lib.optionalAttrs (reason != null && reason != "") { inherit reason; }) ];
       };
     }; };
   step = state: entry:

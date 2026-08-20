@@ -38,13 +38,13 @@ setup overlap (
 
 setup personal (
   // Keep machine selection explicit.
-  omit-skill hidden "Personal machines stay focused."
+  omit-skill hidden ""
   pi claude
 )
 
 setup work-mac (
   root project
-  pi
+  pi opencode
 
   claude (
     skills .claude2/skills

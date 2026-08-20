@@ -111,9 +111,12 @@ map is ordinary Nix data; evaluation never runs the CLI or reads a derivation.
 
 `projectDir` selects the directory containing `skill.mod` within `src`. This lets
 `path:../shared/skills` dependencies use sibling trees from the same source
-workspace. `dependencyOverrides` substitute a declared, locked remote while
-rendering; they never replace its fallback lock. `extraRoots` add named host
-content without editing `skill.mod`.
+workspace.
+
+`src` must be a source path or flake input, not a derivation, because setup
+declarations are read during evaluation. `dependencyOverrides` substitute a
+declared, locked remote while rendering; they never replace its fallback lock.
+`extraRoots` add named host content without editing `skill.mod`.
 
 `project.cli` uses the working project discovered from the current directory for
 `fmt`, `add`, `fetch`, and `update`; pass `--project DIR` when working elsewhere.

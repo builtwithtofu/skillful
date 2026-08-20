@@ -105,9 +105,10 @@ ownership, refuses unmanaged or edited collisions, and removes only unchanged
 stale files. Named setups select home or project paths from their declared root.
 One-off --harness installs always use home paths; --root only relocates them. Use
 --path for a nonstandard layout. --remove retires a named setup from its receipt;
-pass --root after deleting its declaration. Removal rejects --force because changed
-owned files always block. An OpenCode install at retired opencode-v2 paths adopts
-that receipt safely.
+pass --root after deleting its declaration. Valid source overrides are ignored
+during removal because destination ownership comes only from the receipt. Removal
+rejects --force because changed owned files always block. An OpenCode install at
+retired opencode-v2 paths adopts that receipt safely.
 
 Examples:
   skillful install work-mac --dry-run

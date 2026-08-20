@@ -98,6 +98,7 @@ describe("project CLI", () => {
     expect(output(help).stdout).toContain("--path");
     expect(output(help).stdout).toContain("--remove");
     expect(output(help).stdout).toContain("skills=.config/opencode-v2/skills");
+    expect(output(help).stdout).toContain("source overrides are ignored");
     expect(output(help).stdout.toLowerCase()).not.toContain("nix");
 
     const root = temp();
@@ -113,7 +114,13 @@ describe("project CLI", () => {
     expect(output(removeMissing).stderr).toContain("needs a setup name");
     expect(run(root, "install", "old", "--remove", "--harness", "pi").exitCode).toBe(2);
     expect(run(root, "install", "old", "--remove", "--path", "skills=.old").exitCode).toBe(2);
-    expect(run(root, "install", "old", "--remove", "--override", "dep=../dep").exitCode).toBe(2);
+    const malformedOverride = run(root, "install", "old", "--remove", "--override", "typo");
+    expect(malformedOverride.exitCode).toBe(2);
+    expect(output(malformedOverride).stderr).toContain("expects name=path");
+    const duplicateOverride = run(root, "install", "old", "--remove", "--override", "dep=one", "--override", "dep=two");
+    expect(duplicateOverride.exitCode).toBe(2);
+    expect(output(duplicateOverride).stderr).toContain("duplicate --override name");
+
   });
   test("lists, shows, renders, installs, and removes a named setup", () => {
     const root = temp();
@@ -157,7 +164,7 @@ setup work-mac (
     const forcedRemoval = runIn(root, home, "install", "personal", "--remove", "--force", "--project", project, "--root", home);
     expect(forcedRemoval.exitCode).toBe(2);
     expect(output(forcedRemoval).stderr).toContain("cannot mix with --force");
-    expect(runIn(root, home, "install", "personal", "--remove", "--project", project, "--root", home).exitCode).toBe(0);
+    expect(runIn(root, home, "install", "personal", "--remove", "--override", "wrapper-source=../source", "--project", project, "--root", home).exitCode).toBe(0);
     expect(existsSync(installedSkill)).toBe(false);
 
     expect(runIn(root, home, "render", "work-mac", "--project", project).exitCode).toBe(0);

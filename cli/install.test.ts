@@ -22,12 +22,14 @@ function fixture() {
 
 describe("safe installation", () => {
   test("dry-run changes nothing, first install writes state, and rerun is idempotent", () => {
-    const { project, home, state } = fixture();
+    const { root, project, home, state } = fixture();
     const resolved = discoverProject({ project });
-    const dry = installProject(resolved, { harness: "pi", root: home, stateHome: state, dryRun: true });
+    const uninitializedState = join(root, "uninitialized-state");
+    const dry = installProject(resolved, { harness: "pi", root: home, stateHome: uninitializedState, dryRun: true });
     expect(dry.changes.length).toBeGreaterThan(0);
     expect(existsSync(join(home, ".pi"))).toBe(false);
     expect(existsSync(dry.statePath)).toBe(false);
+    expect(existsSync(uninitializedState)).toBe(false);
 
     const first = installProject(resolved, { harness: "pi", root: home, stateHome: state });
     expect(existsSync(join(home, ".pi", "agent", "skills", "example", "SKILL.md"))).toBe(true);

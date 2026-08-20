@@ -197,6 +197,22 @@ setup sibling (
     removeSetup(changed, "local", { root: project.root, stateHome: state });
   });
 
+  test("retires a setup after its source path changes", () => {
+    const original = projectWith(`setup local (\n  pi\n)`);
+    const replacement = projectWith("");
+    const home = join(original.root, "home");
+    const state = join(original.root, "state");
+    mkdirSync(home);
+    mkdirSync(state);
+    const installed = installSetup(original, resolveSetup(original, "local"), { root: home, stateHome: state });
+
+    const removed = removeSetup(replacement, "local", { root: home, stateHome: state });
+
+    expect(removed.statePath).toBe(installed.statePath);
+    expect(existsSync(installed.statePath)).toBe(false);
+    expect(existsSync(join(home, ".pi"))).toBe(false);
+  });
+
 
   test.skipIf(process.platform === "win32")("refuses an escaping symlink and keeps the receipt", () => {
     const project = projectWith(`setup personal (\n  pi\n)`);
