@@ -19,9 +19,13 @@ setup work-mac (
 )
 ```
 
-Omit `root` to install under home. Use `root project` for project-local output;
-`--root DIR` overrides either when applying. Bare harness names use their
-conventional paths. A harness block contains only path exceptions.
+Omit `root` to use each harness's home paths. `root project` selects its project
+paths; `--root DIR` relocates the selected profile when applying. Bare harness
+names use those conventional paths. A harness block contains only exceptions.
+
+Codex, Cursor, Grok, and OpenCode project profiles do not claim `AGENTS.md`.
+Assign `rules AGENTS.md` explicitly to one harness when the project needs it.
+One-off `install --harness` always uses home paths, with `--root` as relocation.
 
 Use repeated `only-skill <name>` or repeated `omit-skill <name> <reason>`, never
 both. Selection names are exact. Omitting a skill also removes its support files

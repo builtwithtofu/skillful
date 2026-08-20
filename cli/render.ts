@@ -103,9 +103,15 @@ function writeHarness(stage: string, plan: ProjectPlan, harness: HarnessId) {
     const skillRoot = join(root, "skills", skill.name);
     writeText(join(skillRoot, "SKILL.md"), skill.body);
     for (const support of skill.supportFiles) {
-      const privateSupport = support as typeof support & { sourcePath?: string; relativePath?: string };
-      if (!privateSupport.sourcePath || !privateSupport.relativePath) fail(`renderer lost support source for ${skill.name}`, "Report this invariant violation with the project and skill name.");
-      copySupport(privateSupport.sourcePath, join(skillRoot, privateSupport.relativePath));
+      if (!support.relativePath) fail(`renderer lost support destination for ${skill.name}`, "Report this invariant violation with the project and skill name.");
+      const target = join(skillRoot, support.relativePath);
+      if (support.copied === "generated") {
+        if (support.generatedBody === null) fail(`renderer lost generated support content for ${skill.name}`, "Report this invariant violation with the project and skill name.");
+        writeText(target, support.generatedBody);
+      } else {
+        if (!support.sourcePath) fail(`renderer lost support source for ${skill.name}`, "Report this invariant violation with the project and skill name.");
+        copySupport(support.sourcePath, target);
+      }
     }
   }
   for (const command of selected.commands) writeText(join(root, "commands", command.name), command.body);

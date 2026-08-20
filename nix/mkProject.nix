@@ -127,7 +127,7 @@ let
     if !(builtins.hasAttr name facts)
     then throw "unknown skillful harness ${name}; known: ${lib.concatStringsSep ", " harnesses}"
     else {
-      installPaths = facts.${name}.installPaths;
+      installPaths = facts.${name}.installPaths.home;
       skills = "${rendered}/${name}/skills";
       commands = "${rendered}/${name}/commands";
       rules = "${rendered}/${name}/rules.md";
@@ -138,9 +138,13 @@ let
     else
       let
         setup = setupDeclarations.${name};
-        resolvedHarnesses = map (harness: harness // {
-          paths = facts.${harness.name}.installPaths // harness.paths;
-        }) setup.harnesses;
+        resolvedHarnesses = map (harness:
+          if facts.${harness.name}.commandMerge == "skill" && harness.paths ? commands
+          then throw "skillful setup ${name} harness ${harness.name} does not support a commands path"
+          else harness // {
+            paths = facts.${harness.name}.installPaths.${setup.root} // harness.paths;
+          }
+        ) setup.harnesses;
         setupRendered = renderTree "skillful-setup-${name}-render" [ name ];
         entries = lib.concatMap (harness: lib.mapAttrsToList (category: destination: {
           inherit category destination;
@@ -199,5 +203,5 @@ in
 {
   inherit harnesses forHarness forSetup cli contract checks rendered;
   setups = setupNames;
-  installPaths = builtins.mapAttrs (_: value: value.installPaths) facts;
+  installPaths = builtins.mapAttrs (_: value: value.installPaths.home) facts;
 }

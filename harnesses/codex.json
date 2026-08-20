@@ -1,0 +1,12 @@
+{
+  "name": "codex",
+  "installPaths": {
+    "home": { "skills": ".agents/skills", "rules": ".codex/AGENTS.md" },
+    "project": { "skills": ".agents/skills" }
+  },
+  "argSyntax": "the user's request that invoked this skill",
+  "skillFrontmatter": ["name", "description", "license", "compatibility", "metadata", "allowed-tools"],
+  "commandFrontmatter": ["description", "argument-hint"],
+  "commandMerge": "skill",
+  "syntheticSkillFiles": { "agents/openai.yaml": "policy:\n  allow_implicit_invocation: false\n" }
+}

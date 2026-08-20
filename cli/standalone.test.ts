@@ -25,7 +25,7 @@ describe("standalone executable", () => {
     expect(run("init", "--dir", project).exitCode).toBe(0);
     const listed = run("list", "harnesses", "--project", project);
     expect(listed.exitCode).toBe(0);
-    expect(new TextDecoder().decode(listed.stdout)).toBe("claude\nopencode\npi\n");
+    expect(new TextDecoder().decode(listed.stdout)).toBe("claude\ncodex\ncursor\ngrok\nopencode\npi\n");
     expect(run("render", "--project", project, "--out", rendered).exitCode).toBe(0);
     expect(existsSync(join(rendered, "pi", "skills", "example", "SKILL.md"))).toBe(true);
     expect(run("install", "--project", project, "--harness", "opencode", "--root", root, "--path", "skills=.config/opencode-v2/skills", "--path", "commands=.config/opencode-v2/commands").exitCode).toBe(0);

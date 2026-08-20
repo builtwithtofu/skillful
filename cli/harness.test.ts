@@ -5,9 +5,12 @@ describe("harness facts", () => {
   test("loads and validates every public fact file", () => {
     const harnesses = loadHarnesses();
     for (const fact of Object.values(harnesses)) {
-      expect(fact.installPaths.skills).toBeString();
-      expect(fact.installPaths.commands).toBeString();
-      expect(["inject", "file"]).toContain(fact.commandMerge);
+      for (const paths of Object.values(fact.installPaths)) {
+        expect(paths.skills).toBeString();
+        if (fact.commandMerge === "skill") expect(paths.commands).toBeUndefined();
+        else expect(paths.commands).toBeString();
+      }
+      expect(["inject", "file", "skill"]).toContain(fact.commandMerge);
     }
   });
 

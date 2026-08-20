@@ -3,8 +3,8 @@
 Author agent skills once, render them per harness.
 
 You write skills, commands, and rules in one project. Skillful renders that
-corpus for each harness: `claude`, `pi`, `opencode`. Other people's trees come
-in through Git (`github:`, `git:`, `path:`).
+corpus for each harness: `claude`, `codex`, `cursor`, `grok`, `opencode`, `pi`.
+Other people's trees come in through Git (`github:`, `git:`, `path:`).
 
 Plain files are enough for a single harness. Use skillful when one tree must
 serve several harnesses, or when you compose another tree with your own.

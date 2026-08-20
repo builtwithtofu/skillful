@@ -1,0 +1,12 @@
+{
+  "name": "cursor",
+  "installPaths": {
+    "home": { "skills": ".cursor/skills" },
+    "project": { "skills": ".cursor/skills" }
+  },
+  "argSyntax": "the user's request that invoked this skill",
+  "skillFrontmatter": ["name", "description", "paths", "disable-model-invocation", "icon", "color", "metadata"],
+  "commandFrontmatter": ["name", "description"],
+  "commandMerge": "skill",
+  "syntheticSkillFrontmatter": { "disable-model-invocation": true }
+}

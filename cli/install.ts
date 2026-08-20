@@ -15,7 +15,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, posix, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { sha256, type ResolveOptions } from "./contract.ts";
 import { HARNESS_IDS, type HarnessId } from "./mod.ts";
 import type { Project } from "./project.ts";
@@ -23,7 +23,7 @@ import { renderProject } from "./render.ts";
 import { loadHarnesses, type HarnessFacts } from "./harness.ts";
 import type { ResolvedSetup } from "./setup.ts";
 
-export type InstallPaths = { skills: string; commands: string; rules?: string };
+export type InstallPaths = { skills: string; commands?: string; rules?: string };
 type CommonInstallOptions = ResolveOptions & {
   root?: string | undefined;
   dryRun?: boolean | undefined;
@@ -61,11 +61,33 @@ function safeRelative(path: string) {
   const normalized = posix.normalize(portable);
   return normalized === "." ? normalized : normalized.replace(/\/+$/, "");
 }
-export function pathConflict(left: string, right: string) {
+export function pathConflict(left: string, right: string, caseInsensitive = false) {
   if (left === "." || right === ".") return true;
-  const a = left.replaceAll("\\", "/");
-  const b = right.replaceAll("\\", "/");
+  const normalize = (path: string) => {
+    const portable = path.replaceAll("\\", "/");
+    return caseInsensitive ? portable.toLowerCase() : portable;
+  };
+  const a = normalize(left);
+  const b = normalize(right);
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+function caseInsensitiveFilesystem(root: string) {
+  let current = root;
+  while (true) {
+    const name = basename(current);
+    const alternate = name.replace(/[A-Za-z]/, (character) => character === character.toLowerCase() ? character.toUpperCase() : character.toLowerCase());
+    if (alternate !== name) {
+      const candidate = join(dirname(current), alternate);
+      if (existsSync(candidate)) {
+        const original = statSync(current);
+        const alias = statSync(candidate);
+        if (original.dev === alias.dev && original.ino === alias.ino) return true;
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) return process.platform === "win32";
+    current = parent;
+  }
 }
 function filesUnder(root: string, prefix = ""): string[] {
   if (!existsSync(join(root, prefix))) return [];
@@ -157,11 +179,14 @@ function ownershipTarget(root: string, relativePath: string) {
   }
   return current;
 }
-export function resolveInstallPaths(facts: HarnessFacts, overrides?: Partial<InstallPaths>) {
-  const rules = overrides?.rules ?? facts.installPaths.rules;
+export function resolveInstallPaths(facts: HarnessFacts, overrides?: Partial<InstallPaths>, scope: "home" | "project" = "home") {
+  const defaults = facts.installPaths[scope];
+  if (overrides?.commands !== undefined && defaults.commands === undefined) fail(`commands path is not supported by ${facts.name}`, "Remove the commands path override; this harness delivers commands as skills.");
+  const commands = overrides?.commands ?? defaults.commands;
+  const rules = overrides?.rules ?? defaults.rules;
   const selected: InstallPaths = {
-    skills: safeRelative(overrides?.skills ?? facts.installPaths.skills),
-    commands: safeRelative(overrides?.commands ?? facts.installPaths.commands),
+    skills: safeRelative(overrides?.skills ?? defaults.skills),
+    ...(commands ? { commands: safeRelative(commands) } : {}),
     ...(rules ? { rules: safeRelative(rules) } : {}),
   };
   const named = Object.entries(selected);
@@ -172,15 +197,17 @@ export function resolveInstallPaths(facts: HarnessFacts, overrides?: Partial<Ins
   }
   return selected;
 }
+
 function collectArtifacts(renderRoot: string, harness: HarnessId, installPaths: InstallPaths) {
   const root = join(renderRoot, harness);
   const files = new Map<string, string>();
   for (const path of filesUnder(join(root, "skills"))) files.set(safeRelative(join(installPaths.skills, path)), join(root, "skills", path));
-  for (const path of filesUnder(join(root, "commands"))) files.set(safeRelative(join(installPaths.commands, path)), join(root, "commands", path));
+  if (installPaths.commands) for (const path of filesUnder(join(root, "commands"))) files.set(safeRelative(join(installPaths.commands, path)), join(root, "commands", path));
   if (installPaths.rules) files.set(safeRelative(installPaths.rules), join(root, "rules.md"));
   return files;
 }
-function assertUnowned(destinationRoot: string, files: Iterable<string>, ignoredStatePaths: ReadonlySet<string>, base: string) {
+
+function assertUnowned(destinationRoot: string, files: Iterable<string>, ignoredStatePaths: ReadonlySet<string>, base: string, caseInsensitive: boolean) {
   const desired = [...files].map((file) => ({ file, target: ownershipTarget(destinationRoot, file) }));
   for (const path of stateFiles(base)) {
     if (ignoredStatePaths.has(path)) continue;
@@ -188,7 +215,7 @@ function assertUnowned(destinationRoot: string, files: Iterable<string>, ignored
     if (!sibling) continue;
     for (const entry of desired) {
       for (const owned of Object.keys(sibling.files)) {
-        if (pathConflict(entry.target, ownershipTarget(sibling.destinationRoot, owned))) {
+        if (pathConflict(entry.target, ownershipTarget(sibling.destinationRoot, owned), caseInsensitive)) {
           fail(
             `destination already owned by another installation: ${entry.file}`,
             `Owned by ${stateOwner(sibling)} at ${sibling.destinationRoot} from ${sibling.projectRoot}. Choose another --path or --root.`,
@@ -239,9 +266,9 @@ type ApplyInstallationOptions = {
 function physicalTargets(destinationRoot: string, files: Iterable<string>) {
   return [...files].map((file) => ({ file, target: ownershipTarget(destinationRoot, file) }));
 }
-function assertDistinctPhysicalTargets(targets: Array<{ file: string; target: string }>) {
+function assertDistinctPhysicalTargets(targets: Array<{ file: string; target: string }>, caseInsensitive: boolean) {
   for (const [index, left] of targets.entries()) for (const right of targets.slice(index + 1)) {
-    if (pathConflict(left.target, right.target)) fail(
+    if (pathConflict(left.target, right.target, caseInsensitive)) fail(
       `overlapping physical installation destinations: ${left.file} and ${right.file}`,
       "Choose destinations that do not meet through a path or symlink alias.",
     );
@@ -250,24 +277,30 @@ function assertDistinctPhysicalTargets(targets: Array<{ file: string; target: st
 function applyInstallation(options: ApplyInstallationOptions): InstallResult {
   const nextHashes = Object.fromEntries([...options.artifacts].map(([path, source]) => [path, sha256(readFileSync(source))]));
   return withInstallLock(options.base, () => {
+    const caseInsensitive = caseInsensitiveFilesystem(options.destinationRoot);
     const desired = physicalTargets(options.destinationRoot, Object.keys(nextHashes));
     const regions = physicalTargets(options.destinationRoot, options.regions);
-    assertDistinctPhysicalTargets(regions);
-    assertDistinctPhysicalTargets(desired);
+    assertDistinctPhysicalTargets(regions, caseInsensitive);
+    assertDistinctPhysicalTargets(desired, caseInsensitive);
     const receipts = options.receipts.map((receipt) => ({ ...receipt, state: readState(receipt.path) }));
     for (const candidate of options.adoptions ?? []) {
       const state = readState(candidate.path);
       if (!state) continue;
-      const overlaps = regions.some((entry) => Object.keys(state.files).some((owned) => pathConflict(entry.target, ownershipTarget(state.destinationRoot, owned))));
+      const overlaps = regions.some((entry) => Object.keys(state.files).some((owned) => pathConflict(entry.target, ownershipTarget(state.destinationRoot, owned), caseInsensitive)));
       if (overlaps) receipts.push({ ...candidate, state });
     }
     for (const receipt of receipts) if (receipt.state) assertStateIdentity(receipt.state, receipt.path, options.projectRoot, options.destinationRoot, receipt.owner);
-    assertUnowned(options.destinationRoot, Object.keys(nextHashes), new Set(receipts.map((receipt) => receipt.path)), options.base);
+    assertUnowned(options.destinationRoot, Object.keys(nextHashes), new Set(receipts.map((receipt) => receipt.path)), options.base, caseInsensitive);
     const oldHashes: Record<string, string> = {};
     for (const receipt of receipts) for (const [path, hash] of Object.entries(receipt.state?.files ?? {})) {
       if (oldHashes[path] && oldHashes[path] !== hash) fail(`conflicting installation ownership: ${path}`, "Move one receipt aside and inspect the destination before retrying.");
       oldHashes[path] = hash;
     }
+    const stale = physicalTargets(options.destinationRoot, Object.keys(oldHashes).filter((path) => !(path in nextHashes)));
+    for (const next of desired) for (const previous of stale) if (pathConflict(next.target, previous.target, caseInsensitive)) fail(
+      `new installation path ${next.file} aliases a stale owned path ${previous.file}`,
+      "Keep the existing path spelling or migrate through a destination that does not alias it.",
+    );
     const changes: InstallChange[] = [];
     for (const path of [...new Set([...Object.keys(oldHashes), ...Object.keys(nextHashes)])].sort()) {
       const target = verifyDestinationPath(options.destinationRoot, path);
@@ -358,7 +391,7 @@ export function removeSetup(project: Project, setupName: string, options: Remove
     if (!state) fail(`no installation receipt for setup ${setupName} under ${destinationRoot}`, "Pass the original --root, or leave the retired setup installed.");
     assertStateIdentity(state, statePath, projectRoot, destinationRoot, { setup: setupName });
     const paths = Object.keys(state.files).sort();
-    assertUnowned(destinationRoot, paths, new Set([statePath]), base);
+    assertUnowned(destinationRoot, paths, new Set([statePath]), base, caseInsensitiveFilesystem(destinationRoot));
     for (const path of paths) {
       const target = verifyDestinationPath(destinationRoot, path);
       const current = existsSync(target) && lstatSync(target).isFile() ? sha256(readFileSync(target)) : null;

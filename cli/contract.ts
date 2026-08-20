@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { loadHarnesses, type HarnessFacts } from "./harness.ts";
+import { loadHarnesses, type HarnessFacts, type HarnessInstallPaths } from "./harness.ts";
+import { isScalar, parseDocument } from "yaml";
 import { HARNESS_IDS, mapHarnesses, type HarnessId, type Omission, type Require, type Setup } from "./mod.ts";
 import { resolveProjectPath, type Project } from "./project.ts";
 import { cachedDependencyPaths } from "./deps.ts";
@@ -11,6 +12,7 @@ export type ResolveOptions = {
   overrides?: Record<string, string> | undefined;
   extraRoots?: { skills?: ExtraRoot[] | undefined; commands?: ExtraRoot[] | undefined } | undefined;
   setup?: string | undefined;
+  harnesses?: HarnessId[] | undefined;
 };
 
 type Source = { kind: string; origin?: string | null; path: string | null };
@@ -21,12 +23,13 @@ type Transformations = {
   command: string[];
 };
 export type SupportFilePlan = {
-  source: { path: string };
+  source: { path: string | null };
   delivery: { kind: "file"; path: string };
   sha256: string;
-  copied: "verbatim";
+  copied: "verbatim" | "generated";
   markup: boolean;
-  sourcePath: string;
+  sourcePath: string | null;
+  generatedBody: string | null;
   relativePath: string;
 };
 export type SkillPlan = {
@@ -54,7 +57,7 @@ export type CommandPlan = {
 };
 export type CommandDisposition = {
   source: "co-located" | "standalone" | "generated" | "none";
-  delivery: "injected" | "file" | "none";
+  delivery: "injected" | "file" | "skill" | "none";
   reason: string;
   authoring: Source | null;
   target: { path: string; sha256: string } | null;
@@ -68,8 +71,8 @@ export type HarnessPlan = {
   facts: HarnessFacts;
   profile: {
     argSyntax: string;
-    installPaths: HarnessFacts["installPaths"];
-    commandMerge: "inject" | "file";
+    installPaths: HarnessInstallPaths;
+    commandMerge: "inject" | "file" | "skill";
     exclusions: Record<string, { code: string; message: string }>;
     excludeCommands: string[];
     commandExclude: string[];
@@ -155,14 +158,11 @@ function frontmatterValue(key: string, text: string) {
   const lines = text.split("\n");
   const end = frontmatterEnd(lines);
   if (end === null) return null;
-  const line = lines.slice(1, end).find((candidate) => keyOf(candidate) === key);
-  if (!line) return null;
-  const raw = line.slice(line.indexOf(":") + 1).trim();
-  if (raw.includes('"')) {
-    if (!(raw.startsWith('"') && raw.endsWith('"')) || raw.slice(1, -1).includes('"')) return null;
-    try { return JSON.parse(raw) as string; } catch { return null; }
-  }
-  return raw;
+  const source = lines.slice(1, end).join("\n");
+  const document = parseDocument(source);
+  if (document.errors.length) fail(`invalid YAML frontmatter: ${document.errors[0]!.message}`, "Fix the frontmatter and retry.");
+  const node = document.get(key, true);
+  return isScalar(node) ? node.value === null ? "" : String(node.value) : null;
 }
 function bodyOf(text: string) {
   const lines = text.split("\n");
@@ -279,13 +279,12 @@ function supportFiles(entry: SkillEntry, deliveryRoot: string): SupportFilePlan[
   const dir = join(entry.root, entry.name);
   return walkSupport(dir).filter((path) => !["SKILL.md", "COMMAND.md", "SOURCE.md"].includes(path)).map((path) => {
     const content = readFileSync(join(dir, path));
-    return { source: { path: sourcePath(entry, path) }, delivery: { kind: "file", path: `${deliveryRoot}/${path.replaceAll("\\", "/")}` }, sha256: sha256(content), copied: "verbatim", markup: content.includes(Buffer.from("{{")) || content.includes(Buffer.from("$@")), sourcePath: join(dir, path), relativePath: path };
+    return { source: { path: sourcePath(entry, path) }, delivery: { kind: "file", path: `${deliveryRoot}/${path.replaceAll("\\", "/")}` }, sha256: sha256(content), copied: "verbatim", markup: content.includes(Buffer.from("{{")) || content.includes(Buffer.from("$@")), sourcePath: join(dir, path), generatedBody: null, relativePath: path };
   });
 }
 function omissionCode(omission: Omission) {
-  // schemaVersion 1 historically exposed stable codes. The generic manifest has
-  // no code field, so preserve known legacy codes and use a stable generic code
-  // for new omissions until schemaVersion 2 can carry explicit structured data.
+  // schemaVersion 1 established stable omission codes. Preserve them in later
+  // manifests even though the generic model has no dedicated code field.
   if (omission.selector === "image-to-svg" && omission.reason === "Requires pi image conversion tools.") return "requires-pi-image-tools";
   if (omission.selector === "subagents" && omission.reason === "Requires the pi subagent extension.") return "pi-extension-only";
   return "project-omission";
@@ -294,7 +293,7 @@ function publicSkill(skill: SkillPlan) {
   const { sourceDir: _sourceDir, ...publicPlan } = skill;
   return {
     ...publicPlan,
-    supportFiles: publicPlan.supportFiles.map(({ sourcePath: _sourcePath, relativePath: _relativePath, ...support }) => support),
+    supportFiles: publicPlan.supportFiles.map(({ sourcePath: _sourcePath, generatedBody: _generatedBody, relativePath: _relativePath, ...support }) => support),
   };
 }
 
@@ -347,7 +346,7 @@ function resolveEntries(project: Project, options: ResolveOptions) {
   return { skills: selectedSkills, commands, setupOmissions };
 }
 
-function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, entries: ReturnType<typeof resolveEntries>): HarnessPlan {
+function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, installPaths: HarnessInstallPaths, entries: ReturnType<typeof resolveEntries>, validateAgentSkillNames: boolean): HarnessPlan {
   const config = project.mod.harnesses[id];
   const tokens = config?.tokens ?? {};
   const omissions = config?.omissions ?? [];
@@ -358,60 +357,68 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, entr
   const canonicalEntries = selectedEntries.filter((entry) => entry.sourceKind === "canonical");
   const coLocated = new Map(canonicalEntries.filter((entry) => existsSync(join(entry.root, entry.name, "COMMAND.md"))).map((entry) => [entry.name, entry]));
   const standaloneBySelector = new Map(entries.commands.map((entry) => [entry.name.replace(/\.md$/, ""), entry]));
-  const merge = facts.commandMerge === "inject";
+  const inject = facts.commandMerge === "inject";
+  const commandsAsSkills = facts.commandMerge === "skill";
+  const commandRoot = installPaths.commands;
+  if (!commandsAsSkills && !commandRoot) fail(`harness ${id} has no command destination`, "Repair its bundled harness facts.");
   const commands: CommandPlan[] = [];
 
-  if (!merge) for (const [name, entry] of coLocated) {
+  if (facts.commandMerge === "file") for (const [name, entry] of coLocated) {
     const fileName = `${name}.md`;
     if (omittedCommands.has(fileName)) continue;
     const raw = readFileSync(join(entry.root, name, "COMMAND.md"), "utf8");
     const body = `${renderCommand(id, facts, tokens, raw)}\nUse the \`${name}\` skill.\n`;
-    commands.push({ name: fileName, source: { kind: "co-located", origin: "canonical", path: `skills/${name}/COMMAND.md` }, delivery: { kind: "file", path: `${facts.installPaths.commands}/${fileName}` }, sha256: sha256(body), frontmatter: frontmatterPlan(raw, body), transformations: transformations(id, facts, tokens, raw), body });
+    commands.push({ name: fileName, source: { kind: "co-located", origin: "canonical", path: `skills/${name}/COMMAND.md` }, delivery: { kind: "file", path: `${commandRoot!}/${fileName}` }, sha256: sha256(body), frontmatter: frontmatterPlan(raw, body), transformations: transformations(id, facts, tokens, raw), body });
   }
   for (const entry of entries.commands) {
     const selector = entry.name.replace(/\.md$/, "");
-    if (omittedCommands.has(entry.name) || (merge && selectedNames.has(selector))) continue;
+    if (omittedCommands.has(entry.name) || commandsAsSkills || coLocated.has(selector) || (inject && selectedNames.has(selector))) continue;
     const raw = readFileSync(join(entry.root, entry.name), "utf8");
     const body = renderCommand(id, facts, tokens, raw);
-    commands.push({ name: entry.name, source: commandSource(entry), delivery: { kind: "file", path: `${facts.installPaths.commands}/${entry.name}` }, sha256: sha256(body), frontmatter: frontmatterPlan(raw, body), transformations: transformations(id, facts, tokens, raw), body });
+    commands.push({ name: entry.name, source: commandSource(entry), delivery: { kind: "file", path: `${commandRoot!}/${entry.name}` }, sha256: sha256(body), frontmatter: frontmatterPlan(raw, body), transformations: transformations(id, facts, tokens, raw), body });
   }
   const covered = new Set([...coLocated.keys(), ...entries.commands.map((entry) => entry.name.replace(/\.md$/, ""))]);
-  if (!merge) for (const entry of canonicalEntries) {
+  if (facts.commandMerge === "file") for (const entry of canonicalEntries) {
     if (covered.has(entry.name) || omittedCommands.has(entry.name) || omittedCommands.has(`${entry.name}.md`)) continue;
     const raw = readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8");
     if (frontmatterValue("user-invocable", raw) === "false") continue;
     const body = router(facts, entry.name, raw);
-    commands.push({ name: `${entry.name}.md`, source: { kind: "generated", origin: "canonical", path: null }, delivery: { kind: "file", path: `${facts.installPaths.commands}/${entry.name}.md` }, sha256: sha256(body), frontmatter: { source: [], retained: frontmatterKeys(body), omitted: [], rendered: frontmatterKeys(body) }, transformations: { fences: [], tokens: [], argSyntax: null, command: ["router-generated"] }, body });
+    commands.push({ name: `${entry.name}.md`, source: { kind: "generated", origin: "canonical", path: null }, delivery: { kind: "file", path: `${commandRoot!}/${entry.name}.md` }, sha256: sha256(body), frontmatter: { source: [], retained: frontmatterKeys(body), omitted: [], rendered: frontmatterKeys(body) }, transformations: { fences: [], tokens: [], argSyntax: null, command: ["router-generated"] }, body });
   }
-  const duplicateCommands = commands.map((command) => ({ name: command.name, origin: command.source.origin ?? command.source.kind }));
-  uniqueByName(duplicateCommands, `delivered command for ${id}`);
+  uniqueByName(commands.map((command) => ({ name: command.name, origin: command.source.origin ?? command.source.kind })), `delivered command for ${id}`);
 
   const commandFor = (name: string, kind?: string) => commands.find((command) => command.name === `${name}.md` && (!kind || command.source.kind === kind));
-  const skills: SkillPlan[] = selectedEntries.map((entry) => {
+  const agentSkillName = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+  const authoredSkills: SkillPlan[] = selectedEntries.map((entry) => {
     const raw = readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8");
     const rendered = renderSkill(id, facts, tokens, raw);
-    const commandRaw = entry.sourceKind === "canonical" && coLocated.has(entry.name) ? readFileSync(join(entry.root, entry.name, "COMMAND.md"), "utf8") : null;
-    const injected = merge && commandRaw !== null;
+    const standalone = standaloneBySelector.get(entry.name);
+    const co = coLocated.get(entry.name);
+    const commandOmitted = omittedCommands.has(entry.name) || omittedCommands.has(`${entry.name}.md`);
+
+    const coCommandRaw = co && !commandOmitted ? readFileSync(join(entry.root, entry.name, "COMMAND.md"), "utf8") : null;
+    const standaloneCommandRaw = (inject || commandsAsSkills) && standalone && !commandOmitted ? readFileSync(join(standalone.root, standalone.name), "utf8") : null;
+    const commandRaw = coCommandRaw ?? standaloneCommandRaw;
+    if (commandsAsSkills && validateAgentSkillNames && (entry.name.length > 64 || !agentSkillName.test(entry.name))) fail(`invalid Agent Skill name ${JSON.stringify(entry.name)} rendered for ${id}`, "Rename the skill using at most 64 lowercase letters, numbers, and single hyphens.");
+    const injected = (inject || commandsAsSkills) && commandRaw !== null;
     const body = injected ? injectCommand(id, facts, tokens, rendered, commandRaw!) : rendered;
-    const delivery = { kind: "file" as const, path: `${facts.installPaths.skills}/${entry.name}/SKILL.md` };
+    const delivery = { kind: "file" as const, path: `${installPaths.skills}/${entry.name}/SKILL.md` };
     const baseTransforms = transformations(id, facts, tokens, raw);
     if (injected) baseTransforms.command = ["command-injected", "authoring-file-omitted"];
     const plan: SkillPlan = {
       name: entry.name,
-      description: frontmatterValue("description", raw),
+      description: frontmatterValue("description", rendered),
       origin: entry.origin,
       source: skillSource(entry),
       delivery,
       sha256: sha256(body),
       frontmatter: frontmatterPlan(raw, body),
       transformations: baseTransforms,
-      supportFiles: supportFiles(entry, `${facts.installPaths.skills}/${entry.name}`),
+      supportFiles: supportFiles(entry, `${installPaths.skills}/${entry.name}`),
       command: { source: "none", delivery: "none", reason: "No co-located, standalone, or generated command is delivered for this skill.", authoring: null, target: null, body: null },
       body,
       sourceDir: join(entry.root, entry.name),
     };
-    const standalone = standaloneBySelector.get(entry.name);
-    const co = coLocated.get(entry.name);
     const coSpec = commandFor(entry.name, "co-located");
     const standaloneSpec = commandFor(entry.name, "standalone") ?? commandFor(entry.name, "external");
     const generatedSpec = commandFor(entry.name, "generated");
@@ -422,11 +429,45 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, entr
       else plan.command = { source: "co-located", delivery: "none", reason: "The profile excludes the co-located command file.", authoring, target: null, body: null };
     } else if (standalone) {
       const authoring = commandSource(standalone);
-      if (standaloneSpec) plan.command = { source: "standalone", delivery: "file", reason: "A standalone command with the same selector is emitted as a file.", authoring, target: { path: standaloneSpec.delivery.path, sha256: standaloneSpec.sha256 }, body: standaloneSpec.body, frontmatter: standaloneSpec.frontmatter, transformations: standaloneSpec.transformations };
+      if (injected) plan.command = { source: "standalone", delivery: "injected", reason: "The profile injects the matching standalone command into the skill artifact.", authoring, target: { path: delivery.path, sha256: plan.sha256 }, body, frontmatter: frontmatterPlan(commandRaw!, renderText(id, facts, tokens, commandRaw!)), transformations: { ...transformations(id, facts, tokens, commandRaw!), command: ["command-injected", "authoring-file-omitted"] } };
+      else if (standaloneSpec) plan.command = { source: "standalone", delivery: "file", reason: "A standalone command with the same selector is emitted as a file.", authoring, target: { path: standaloneSpec.delivery.path, sha256: standaloneSpec.sha256 }, body: standaloneSpec.body, frontmatter: standaloneSpec.frontmatter, transformations: standaloneSpec.transformations };
       else plan.command = { source: "standalone", delivery: "none", reason: "The profile does not emit the matching standalone command.", authoring, target: null, body: null };
     } else if (generatedSpec) plan.command = { source: "generated", delivery: "file", reason: "A generated router is the command surface for this user-invocable skill.", authoring: null, target: { path: generatedSpec.delivery.path, sha256: generatedSpec.sha256 }, body: generatedSpec.body, frontmatter: generatedSpec.frontmatter, transformations: generatedSpec.transformations };
     return plan;
   });
+
+
+  const syntheticSkills: SkillPlan[] = commandsAsSkills ? entries.commands.filter((entry) => {
+    const selector = entry.name.replace(/\.md$/, "");
+    return !selectedNames.has(selector) && !omittedCommands.has(entry.name);
+  }).map((entry) => {
+    const name = entry.name.replace(/\.md$/, "");
+    if (name.length > 64 || !agentSkillName.test(name)) fail(`invalid Agent Skill name ${JSON.stringify(name)} synthesized from command ${entry.name} for ${id}`, "Rename the command using at most 64 lowercase letters, numbers, and single hyphens.");
+    const raw = readFileSync(join(entry.root, entry.name), "utf8");
+    const rendered = renderText(id, facts, tokens, raw);
+    const description = frontmatterValue("description", rendered) ?? `Run the ${name} workflow when explicitly invoked.`;
+    const syntheticFrontmatter = Object.entries(facts.syntheticSkillFrontmatter ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}: ${typeof value === "boolean" ? value : JSON.stringify(value)}`);
+    const body = `---\nname: ${name}\ndescription: ${JSON.stringify(description)}${syntheticFrontmatter.length ? `\n${syntheticFrontmatter.join("\n")}` : ""}\n---\n\n${bodyOf(rendered).replace(/^\n/, "")}`;
+    const delivery = { kind: "file" as const, path: `${installPaths.skills}/${name}/SKILL.md` };
+    const commandTransforms = transformations(id, facts, tokens, raw);
+    commandTransforms.command = ["command-synthesized-as-skill"];
+    const hash = sha256(body);
+    return {
+      name,
+      description,
+      origin: entry.origin,
+      source: commandSource(entry),
+      delivery,
+      sha256: hash,
+      frontmatter: frontmatterPlan(raw, body),
+      transformations: commandTransforms,
+      supportFiles: Object.entries(facts.syntheticSkillFiles ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([path, generatedBody]) => ({ source: { path: null }, delivery: { kind: "file", path: `${installPaths.skills}/${name}/${path}` }, sha256: sha256(generatedBody), copied: "generated", markup: false, sourcePath: null, generatedBody, relativePath: path })),
+      command: { source: "standalone", delivery: "skill", reason: "The profile delivers the standalone command as a skill.", authoring: commandSource(entry), target: { path: delivery.path, sha256: hash }, body, frontmatter: frontmatterPlan(raw, body), transformations: commandTransforms },
+      body,
+      sourceDir: entry.root,
+    };
+  }) : [];
+  const skills = [...authoredSkills, ...syntheticSkills].sort((left, right) => left.name.localeCompare(right.name));
 
   const rulesPath = resolveProjectPath(project, project.mod.roots.rules, "file");
   const rulesRaw = readFileSync(rulesPath, "utf8");
@@ -434,11 +475,11 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, entr
   return {
     id,
     facts,
-    profile: { argSyntax: facts.argSyntax, installPaths: facts.installPaths, commandMerge: facts.commandMerge, exclusions: omittedSkills, excludeCommands: [...omittedCommands].sort(), commandExclude: [] },
+    profile: { argSyntax: facts.argSyntax, installPaths, commandMerge: facts.commandMerge, exclusions: omittedSkills, excludeCommands: [...omittedCommands].sort(), commandExclude: [] },
     omittedSkills,
     skills,
     commands,
-    rules: { source: { kind: "canonical", path: "rules/global_agents.md" }, delivery: facts.installPaths.rules ? { kind: "file", path: facts.installPaths.rules } : null, sha256: sha256(rulesBody), body: rulesBody },
+    rules: { source: { kind: "canonical", path: "rules/global_agents.md" }, delivery: installPaths.rules ? { kind: "file", path: installPaths.rules } : null, sha256: sha256(rulesBody), body: rulesBody },
     assets: [],
   };
 }
@@ -446,7 +487,10 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, entr
 export function resolvePlan(project: Project, options: ResolveOptions = {}): ProjectPlan {
   const facts = loadHarnesses();
   const entries = resolveEntries(project, { ...options, overrides: cachedDependencyPaths(project, options.overrides) });
-  return { project, harnesses: mapHarnesses((id) => buildHarness(project, id, facts[id], entries)) };
+  const setup = options.setup ? setupFor(project, options.setup) : null;
+  const scope = setup?.root ?? "home";
+  const selectedHarnesses = new Set(setup ? setup.harnesses.map((harness) => harness.id) : options.harnesses?.length ? options.harnesses : HARNESS_IDS);
+  return { project, harnesses: mapHarnesses((id) => buildHarness(project, id, facts[id], facts[id].installPaths[scope], entries, selectedHarnesses.has(id))) };
 }
 export function contractFor(plan: ProjectPlan) {
   const facts = loadHarnesses();

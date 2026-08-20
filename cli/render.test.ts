@@ -46,6 +46,126 @@ describe("TypeScript renderer", () => {
     expect(text(join(project, "rendered", "pi", "rules.md"))).toContain("This line demonstrates rules rendering.");
     expect(text(join(project, "rendered", "pi", "skills", "example", "references", "guide.md"))).toContain("copied without rendering");
   });
+
+  test("renders Codex skills, fences, and standalone commands as skills", () => {
+    const { project, resolved } = fixture();
+
+    renderProject(resolved, { harnesses: ["codex"] });
+
+    const renderedSkill = text(join(project, "rendered", "codex", "skills", "example", "SKILL.md"));
+    expect(renderedSkill).toContain("This resource is rendered for Codex");
+    expect(renderedSkill).toContain("Codex keeps this line.");
+    expect(renderedSkill).toContain("Use the example skill with:");
+    expect(renderedSkill).toContain("the user's request that invoked this skill");
+    const standalone = text(join(project, "rendered", "codex", "skills", "standalone", "SKILL.md"));
+    expect(standalone).toContain("name: standalone");
+    expect(standalone).toContain("A standalone fixture command");
+    expect(text(join(project, "rendered", "codex", "skills", "standalone", "agents", "openai.yaml"))).toContain("allow_implicit_invocation: false");
+    expect(existsSync(join(project, "rendered", "codex", "commands", "standalone.md"))).toBe(false);
+  });
+
+  test("renders Cursor skills, fences, and standalone commands as manual skills", () => {
+    const { project, resolved } = fixture();
+
+    renderProject(resolved, { harnesses: ["cursor"] });
+
+    const renderedSkill = text(join(project, "rendered", "cursor", "skills", "example", "SKILL.md"));
+    expect(renderedSkill).toContain("This resource is rendered for Cursor");
+    expect(renderedSkill).toContain("Cursor keeps this line.");
+    expect(renderedSkill).toContain("the user's request that invoked this skill");
+    const standalone = text(join(project, "rendered", "cursor", "skills", "standalone", "SKILL.md"));
+    expect(standalone).toContain("disable-model-invocation: true");
+    expect(standalone).toContain("A standalone fixture command");
+    expect(existsSync(join(project, "rendered", "cursor", "commands", "standalone.md"))).toBe(false);
+  });
+
+  test("renders Grok skills, native commands, rules, and fences", () => {
+    const { project, resolved } = fixture();
+
+    renderProject(resolved, { harnesses: ["grok"] });
+
+    const renderedSkill = text(join(project, "rendered", "grok", "skills", "example", "SKILL.md"));
+    expect(renderedSkill).toContain("This resource is rendered for Grok");
+    expect(renderedSkill).toContain("Grok keeps this line.");
+    expect(renderedSkill).toContain("Use the example skill with: $ARGUMENTS");
+    expect(existsSync(join(project, "rendered", "grok", "commands", "example.md"))).toBe(false);
+    expect(text(join(project, "rendered", "grok", "commands", "standalone.md"))).toContain("This command accepts: $ARGUMENTS");
+    expect(text(join(project, "rendered", "grok", "rules.md"))).toContain("# Shared rules");
+  });
+
+  test("injects matching standalone Grok commands and preserves path scoping", () => {
+    const { project } = fixture();
+    rmSync(join(project, "skills", "example", "COMMAND.md"));
+    writeFileSync(join(project, "commands", "example.md"), "---\ndescription: Matching command\n---\n\nMatching Grok command: $@\n");
+    writeFileSync(join(project, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Scoped example\npaths:\n  - src/**\n---\n\n# Example\n");
+
+    renderProject(discoverProject({ project }), { harnesses: ["grok"] });
+
+    const rendered = text(join(project, "rendered", "grok", "skills", "example", "SKILL.md"));
+    expect(rendered).toContain("paths:\n  - src/**");
+    expect(rendered).toContain("Matching Grok command: $ARGUMENTS");
+    expect(existsSync(join(project, "rendered", "grok", "commands", "example.md"))).toBe(false);
+  });
+
+  test("prefers a co-located command when a standalone command has the same name", () => {
+    const { project } = fixture();
+    writeFileSync(join(project, "commands", "example.md"), "---\ndescription: Duplicate source\n---\n\nStandalone command.\n");
+
+    renderProject(discoverProject({ project }), { harnesses: ["claude"] });
+
+    const rendered = text(join(project, "rendered", "claude", "skills", "example", "SKILL.md"));
+    expect(rendered).toContain("Use the example skill with: $ARGUMENTS");
+    expect(rendered).not.toContain("Standalone command.");
+  });
+
+  test("reads skill metadata after rendering harness markup", () => {
+    const { project } = fixture();
+    writeFileSync(join(project, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: {{audience}}\n---\n\n# Example\n");
+
+    const plan = resolvePlan(discoverProject({ project }), { harnesses: ["codex"] });
+
+    expect(plan.harnesses.codex.skills.find((skill) => skill.name === "example")?.description).toBe("Codex");
+  });
+
+  test("validates Agent Skill names only for selected harnesses", () => {
+    const { project } = fixture();
+    mkdirSync(join(project, "skills", "Upper"));
+    writeFileSync(join(project, "skills", "Upper", "SKILL.md"), "---\nname: Upper\ndescription: Uppercase fixture\n---\n");
+    writeFileSync(join(project, "skill.mod"), `${text(join(project, "skill.mod"))}
+setup pi-only (
+  only-skill Upper
+  pi
+)
+`);
+    const resolved = discoverProject({ project });
+
+    expect(() => renderProject(resolved, { harnesses: ["cursor"] })).toThrow("invalid Agent Skill name");
+    expect(() => renderProject(resolved, { setup: "pi-only" })).not.toThrow();
+  });
+
+  test("converts multiline command descriptions into valid manual skills", () => {
+    const { project } = fixture();
+    writeFileSync(join(project, "commands", "multiline.md"), `---
+description: >-
+  Run the multiline command
+  when explicitly invoked.
+---
+
+Do the work.
+`);
+
+    renderProject(discoverProject({ project }), { harnesses: ["cursor"] });
+
+    const rendered = text(join(project, "rendered", "cursor", "skills", "multiline", "SKILL.md"));
+    expect(rendered).toContain('description: "Run the multiline command when explicitly invoked."');
+  });
+
+  test("rejects command names that cannot become Agent Skill names", () => {
+    const { project } = fixture();
+    writeFileSync(join(project, "commands", "deploy_db.md"), "Deploy it.\n");
+
+    expect(() => renderProject(discoverProject({ project }), { harnesses: ["cursor"] })).toThrow("invalid Agent Skill name");
+  });
   test("renders only a named setup and removes harnesses outside it", () => {
     const { project, resolved } = fixture();
     renderProject(resolved);
