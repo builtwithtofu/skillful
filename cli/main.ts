@@ -298,7 +298,8 @@ export function createProgram() {
       if (options.remove) {
         if (options.harness) throw new CliUsageError("install --remove cannot mix with --harness", "Pass the retired setup name instead.");
         if (options.path?.length) throw new CliUsageError("install --remove cannot mix with --path", "Removal uses destinations recorded in the receipt.");
-        if (options.override?.length || options.extraSkillRoot?.length || options.extraCommandRoot?.length) throw new CliUsageError("install --remove cannot mix with source overrides", "Removal reads only the ownership receipt.");
+        assignments(options.override, "--override");
+        extraRoots(options.extraSkillRoot, options.extraCommandRoot);
         if (!setupName) throw new CliUsageError("install --remove needs a setup name", "Pass the exact retired setup name and its original --root if needed.");
         if (options.force) throw new CliUsageError("install --remove cannot mix with --force", "Restore changed owned files before removal; force never deletes them.");
         const result = removeSetup(project, setupName, { root: one(options.root, "--root"), dryRun: options.dryRun });

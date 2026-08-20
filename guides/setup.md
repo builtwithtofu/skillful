@@ -44,7 +44,8 @@ skillful install old-work --remove
 `render` is a managed build tree. Only `install` writes live destinations. Use
 `install --harness` for a one-off harness instead of a declared machine setup.
 Use `install <name> --remove` to retire an instance from its ownership receipt.
-After deleting its declaration, pass the exact original `--root`. Removal rejects
-`--force` and deletes only unchanged owned files.
+After deleting its declaration, pass the exact original `--root`. Valid source
+overrides are ignored during removal; destinations come only from the receipt.
+Removal rejects `--force` and deletes only unchanged owned files.
 
 `skillful skills show mod` · `skillful skills show render`

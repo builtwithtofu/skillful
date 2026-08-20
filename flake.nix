@@ -41,6 +41,11 @@
             src = self;
             projectDir = "tests/fixtures/setup-project";
           };
+          derivationProject = pkgs.runCommand "skillful-derivation-project" { } ''
+            cp -r ${./templates/basic} "$out"
+          '';
+          invalidDerivationOutputSource = builtins.tryEval (builtins.deepSeq ((mkProject { inherit pkgs; src = derivationProject.outPath; }).setups) true);
+          invalidDerivationSource = builtins.tryEval (builtins.deepSeq ((mkProject { inherit pkgs; src = derivationProject; }).setups) true);
           personalSetup = setupFixture.forSetup "personal";
           workSetup = setupFixture.forSetup "work-mac";
           uppercaseSetup = setupFixture.forSetup "uppercase";
@@ -172,6 +177,8 @@
             assert !invalidUnsafe.success;
             assert !invalidMixed.success;
             assert !invalidRootHome.success;
+            assert !invalidDerivationOutputSource.success;
+            assert !invalidDerivationSource.success;
             assert !unknownSetup.success;
             assert !overlappingSetup.success;
             assert !nestedOverlappingSetup.success;
@@ -179,6 +186,9 @@
             assert !unsupportedCommandSetup.success;
             assert setupSourcesInsideRender personalSetup;
             assert setupSourcesInsideRender workSetup;
+            assert workSetup.installPaths.opencode.skills == ".opencode/skills";
+            assert workSetup.installPaths.opencode.commands == ".opencode/commands";
+            assert !(workSetup.installPaths.opencode ? rules);
             pkgs.runCommand "skillful-setup-projection-check" {
               nativeBuildInputs = [ setupFixture.cli pkgs.jq pkgs.diffutils ];
               expectedSetups = builtins.toJSON {

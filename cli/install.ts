@@ -137,15 +137,23 @@ function stateFiles(dir: string): string[] {
   });
 }
 function withInstallLock<T>(base: string, operation: () => T): T {
-  mkdirSync(base, { recursive: true });
-  const lock = join(base, ".install.lock");
+  const lockRoot = dirname(dirname(dirname(base)));
+  mkdirSync(lockRoot, { recursive: true });
+  const lock = join(lockRoot, `.skillful-install-${sha256(base)}.lock`);
   try { mkdirSync(lock); }
   catch (error) {
     if (existsSync(lock)) fail(`another installation is running`, `Wait for it to finish. If no install is running, remove ${lock} and retry.`);
     throw error;
   }
-  try { return operation(); }
-  finally { rmSync(lock, { recursive: true, force: true }); }
+  const created: string[] = [];
+  try {
+    for (let path = base; path !== lockRoot && !existsSync(path); path = dirname(path)) created.push(path);
+    mkdirSync(base, { recursive: true });
+    return operation();
+  } finally {
+    for (const path of created) try { rmdirSync(path); } catch { break; }
+    rmSync(lock, { recursive: true, force: true });
+  }
 }
 function verifyDestinationPath(root: string, relativePath: string) {
   const safe = safeRelative(relativePath);
@@ -385,11 +393,22 @@ export function removeSetup(project: Project, setupName: string, options: Remove
   const projectId = sha256(projectRoot);
   const rootId = sha256(destinationRoot);
   const base = stateBase(options.stateHome);
-  const statePath = setupStatePath(base, projectId, setupName, rootId);
+  const expectedStatePath = setupStatePath(base, projectId, setupName, rootId);
   return withInstallLock(base, () => {
-    const state = readState(statePath);
+    let statePath = expectedStatePath;
+    let state = readState(statePath);
+    if (!state) {
+      const candidates = stateFiles(base).flatMap((path) => {
+        const candidate = readState(path);
+        if (!candidate || candidate.setup !== setupName || candidate.destinationRoot !== destinationRoot) return [];
+        const recordedPath = setupStatePath(base, sha256(candidate.projectRoot), setupName, rootId);
+        return path === recordedPath ? [{ path, state: candidate }] : [];
+      });
+      if (candidates.length > 1) fail(`ambiguous installation receipts for setup ${setupName} under ${destinationRoot}`, "Remove obsolete duplicate receipts after inspecting their destinations.");
+      if (candidates[0]) ({ path: statePath, state } = candidates[0]);
+    }
     if (!state) fail(`no installation receipt for setup ${setupName} under ${destinationRoot}`, "Pass the original --root, or leave the retired setup installed.");
-    assertStateIdentity(state, statePath, projectRoot, destinationRoot, { setup: setupName });
+    assertStateIdentity(state, statePath, state.projectRoot, destinationRoot, { setup: setupName });
     const paths = Object.keys(state.files).sort();
     assertUnowned(destinationRoot, paths, new Set([statePath]), base, caseInsensitiveFilesystem(destinationRoot));
     for (const path of paths) {
