@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { loadHarnesses, type HarnessFacts } from "./harness.ts";
-import { mapHarnesses, type HarnessId, type Omission, type Require } from "./mod.ts";
+import { HARNESS_IDS, mapHarnesses, type HarnessId, type Omission, type Require, type Setup } from "./mod.ts";
 import { resolveProjectPath, type Project } from "./project.ts";
 import { cachedDependencyPaths } from "./deps.ts";
 
@@ -10,6 +10,7 @@ export type ExtraRoot = { origin: string; path: string };
 export type ResolveOptions = {
   overrides?: Record<string, string> | undefined;
   extraRoots?: { skills?: ExtraRoot[] | undefined; commands?: ExtraRoot[] | undefined } | undefined;
+  setup?: string | undefined;
 };
 
 type Source = { kind: string; origin?: string | null; path: string | null };
@@ -191,8 +192,8 @@ function frontmatterPlan(raw: string, rendered: string): FrontmatterPlan {
 }
 function fenceMatch(line: string) { return line.match(/^\s*\{\{([#^])([a-z0-9 -]+)\}\}\s*$/); }
 function canonicalHarness(name: string): HarnessId {
-  if (["claude", "pi", "opencode", "opencode-v2"].includes(name)) return name as HarnessId;
-  fail(`unknown harness ${name} in renderer fence`, "Use claude, pi, opencode, or opencode-v2.");
+  if ((HARNESS_IDS as readonly string[]).includes(name)) return name as HarnessId;
+  fail(`unknown harness ${name} in renderer fence`, `Use ${HARNESS_IDS.join(", ")}.`);
 }
 function fenceTransforms(id: HarnessId, text: string): Transformations["fences"] {
   return text.split("\n").flatMap((line) => {
@@ -297,6 +298,13 @@ function publicSkill(skill: SkillPlan) {
   };
 }
 
+function setupFor(project: Project, name: string): Setup {
+  const setup = project.mod.setups[name];
+  if (setup) return setup;
+  const known = Object.keys(project.mod.setups).sort();
+  fail(`unknown setup: ${name}`, `Choose one of: ${known.join(", ") || "none declared"}.`);
+}
+
 function resolveEntries(project: Project, options: ResolveOptions) {
   const overrides = options.overrides ?? {};
   const declared = new Set(project.mod.requires.map((requirement) => requirement.name));
@@ -314,6 +322,19 @@ function resolveEntries(project: Project, options: ResolveOptions) {
   }
   for (const entry of skills) if (!existsSync(join(entry.root, entry.name, "SKILL.md"))) fail(`skill ${entry.name} from ${entry.origin} has no SKILL.md`, `Add ${join(entry.root, entry.name, "SKILL.md")} or exclude the skill.`);
   uniqueByName(skills, "skill");
+  const setup = options.setup ? setupFor(project, options.setup) : undefined;
+  const knownSkills = new Set(skills.map((entry) => entry.name));
+  for (const selector of setup?.selectors ?? []) if (!knownSkills.has(selector.name)) fail(`unknown skill ${selector.name} in setup ${setup!.name}`, "Use an exact skill name from `skillful list skills`.");
+  const selectedSkills = setup?.mode === "only"
+    ? skills.filter((entry) => setup.selectors.some((selector) => selector.name === entry.name))
+    : setup?.mode === "omit"
+      ? skills.filter((entry) => !setup.selectors.some((selector) => selector.name === entry.name))
+      : skills;
+  const selectedNames = new Set(selectedSkills.map((entry) => entry.name));
+  const setupOmissions = Object.fromEntries(skills.filter((entry) => !selectedNames.has(entry.name)).map((entry) => {
+    const selector = setup?.selectors.find((candidate) => candidate.name === entry.name);
+    return [entry.name, { code: "setup-omission", message: selector?.reason ?? `Not selected by setup ${setup!.name}.` }];
+  }));
 
   const commandRoot = resolveProjectPath(project, project.mod.roots.commands, "directory");
   const commands: CommandEntry[] = sortedMarkdown(commandRoot).map((name) => ({ name, origin: "canonical", root: commandRoot, sourceKind: "standalone" }));
@@ -323,14 +344,14 @@ function resolveEntries(project: Project, options: ResolveOptions) {
     for (const name of sortedMarkdown(root)) commands.push({ name, origin: extra.origin, root, sourceKind: "extra" });
   }
   uniqueByName(commands, "command");
-  return { skills, commands };
+  return { skills: selectedSkills, commands, setupOmissions };
 }
 
 function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, entries: ReturnType<typeof resolveEntries>): HarnessPlan {
   const config = project.mod.harnesses[id];
   const tokens = config?.tokens ?? {};
   const omissions = config?.omissions ?? [];
-  const omittedSkills = Object.fromEntries(omissions.filter((item) => item.kind === "omit-skill").map((item) => [item.selector, { code: omissionCode(item), message: item.reason }]));
+  const omittedSkills = { ...entries.setupOmissions, ...Object.fromEntries(omissions.filter((item) => item.kind === "omit-skill").map((item) => [item.selector, { code: omissionCode(item), message: item.reason }])) };
   const omittedCommands = new Set(omissions.filter((item) => item.kind === "omit-command").flatMap((item) => [item.selector, item.selector.endsWith(".md") ? item.selector : `${item.selector}.md`]));
   const selectedEntries = entries.skills.filter((entry) => !omittedSkills[entry.name]);
   const selectedNames = new Set(selectedEntries.map((entry) => entry.name));
@@ -439,6 +460,11 @@ export function contractFor(plan: ProjectPlan) {
       }),
     },
     manifest: {
+      setups: Object.fromEntries(Object.values(plan.project.mod.setups).sort((a, b) => a.name.localeCompare(b.name)).map((setup) => [setup.name, {
+        root: setup.root,
+        selection: { mode: setup.mode ?? "all", skills: setup.selectors.map(({ name, reason }) => ({ name, ...(reason ? { reason } : {}) })) },
+        harnesses: setup.harnesses.map((harness) => ({ name: harness.id, paths: harness.paths })),
+      }])),
       harnesses: mapHarnesses((id) => {
         const harness = plan.harnesses[id];
         return { profile: harness.profile, skills: harness.skills.map(publicSkill), omittedSkills: harness.omittedSkills, commands: harness.commands, rules: { source: harness.rules.source, delivery: harness.rules.delivery, sha256: harness.rules.sha256 }, assets: [] };

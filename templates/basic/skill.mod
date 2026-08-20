@@ -12,10 +12,6 @@ harness opencode (
   token audience "OpenCode"
 )
 
-harness opencode-v2 (
-  token audience "OpenCode v2"
-)
-
 harness pi (
   token audience "Pi"
 )

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cacheKey } from "./nar.ts";
@@ -8,6 +8,7 @@ const dirs: string[] = [];
 const temp = () => { const dir = join(tmpdir(), `skillful-main-${crypto.randomUUID()}`); mkdirSync(dir); dirs.push(dir); return dir; };
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 const run = (cwd: string, ...args: string[]) => Bun.spawnSync(["bun", join(import.meta.dir, "main.ts"), ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+const runIn = (cwd: string, home: string, ...args: string[]) => Bun.spawnSync(["bun", join(import.meta.dir, "main.ts"), ...args], { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, XDG_STATE_HOME: join(home, ".state") } });
 const output = (result: ReturnType<typeof run>) => ({ stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) });
 
 describe("project CLI", () => {
@@ -62,6 +63,7 @@ describe("project CLI", () => {
     expect(treeText).toContain("deps");
     expect(treeText).toContain("inspect");
     expect(treeText).toContain("render");
+    expect(treeText).toContain("setup");
     expect(treeText).toContain("skillful skills show <topic>");
     expect(treeText.toLowerCase()).not.toContain("nix");
 
@@ -89,6 +91,81 @@ describe("project CLI", () => {
     expect(stdout).not.toContain("(default: [])");
     expect(stdout.toLowerCase()).not.toContain("nix");
   });
+
+  test("install help documents custom paths and rejects unknown categories", () => {
+    const help = run(temp(), "install", "--help");
+    expect(help.exitCode).toBe(0);
+    expect(output(help).stdout).toContain("--path");
+    expect(output(help).stdout).toContain("--remove");
+    expect(output(help).stdout).toContain("skills=.config/opencode-v2/skills");
+    expect(output(help).stdout.toLowerCase()).not.toContain("nix");
+
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    const unknown = run(root, "install", "--harness", "opencode", "--path", "tools=.config/tools");
+    expect(unknown.exitCode).toBe(2);
+    expect(output(unknown).stderr).toContain("unknown --path tools");
+    const missing = run(root, "install");
+    expect(missing.exitCode).toBe(2);
+    expect(output(missing).stderr).toContain("setup name or --harness");
+    const removeMissing = run(root, "install", "--remove");
+    expect(removeMissing.exitCode).toBe(2);
+    expect(output(removeMissing).stderr).toContain("needs a setup name");
+    expect(run(root, "install", "old", "--remove", "--harness", "pi").exitCode).toBe(2);
+    expect(run(root, "install", "old", "--remove", "--path", "skills=.old").exitCode).toBe(2);
+    expect(run(root, "install", "old", "--remove", "--override", "dep=../dep").exitCode).toBe(2);
+  });
+  test("lists, shows, renders, installs, and removes a named setup", () => {
+    const root = temp();
+    const project = join(root, "project");
+    const home = join(root, "home");
+    mkdirSync(home);
+    expect(run(root, "init", "--dir", project).exitCode).toBe(0);
+    const mod = join(project, "skill.mod");
+    writeFileSync(mod, `${readFileSync(mod, "utf8").trimEnd()}
+
+setup personal (
+  omit-skill hidden "Not personal."
+  pi claude
+)
+
+setup work-mac (
+  pi
+
+  claude (
+    skills .claude2/skills
+    commands .claude2/commands
+  )
+)
+`);
+
+    const listed = runIn(root, home, "list", "setups", "--project", project);
+    expect(listed.exitCode).toBe(0);
+    expect(output(listed).stdout).toBe("personal\nwork-mac\n");
+    const shown = runIn(root, home, "setup", "show", "work-mac", "--project", project, "--format", "json");
+    expect(shown.exitCode).toBe(0);
+    const shownValue = JSON.parse(output(shown).stdout) as { setup: { harnesses: Array<{ name: string }>; files: Record<string, { harness: string }> } };
+    expect(shownValue.setup.harnesses.map((harness) => harness.name)).toEqual(["pi", "claude"]);
+    expect(shownValue.setup.files[".claude2/skills/example/SKILL.md"]?.harness).toBe("claude");
+
+    expect(runIn(root, home, "install", "personal", "--project", project, "--root", home).exitCode).toBe(0);
+    const installedSkill = join(home, ".pi", "agent", "skills", "example", "SKILL.md");
+    expect(existsSync(installedSkill)).toBe(true);
+    expect(existsSync(join(home, ".pi", "agent", "skills", "hidden", "SKILL.md"))).toBe(false);
+
+    writeFileSync(mod, readFileSync(mod, "utf8").replace(/\nsetup personal \([\s\S]*?\n\)\n/, "\n"));
+    const forcedRemoval = runIn(root, home, "install", "personal", "--remove", "--force", "--project", project, "--root", home);
+    expect(forcedRemoval.exitCode).toBe(2);
+    expect(output(forcedRemoval).stderr).toContain("cannot mix with --force");
+    expect(runIn(root, home, "install", "personal", "--remove", "--project", project, "--root", home).exitCode).toBe(0);
+    expect(existsSync(installedSkill)).toBe(false);
+
+    expect(runIn(root, home, "render", "work-mac", "--project", project).exitCode).toBe(0);
+    expect(existsSync(join(project, "rendered", "claude", "skills", "example", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(project, "rendered", "opencode"))).toBe(false);
+    expect(runIn(root, home, "install", "work-mac", "--harness", "pi", "--project", project).exitCode).toBe(2);
+  });
+
 
   test("init then fmt --check is a Bun-only journey", () => {
     const root = temp();

@@ -60,13 +60,51 @@ harness pi (
     expect(formatText(once, "skill.mod")).toBe(once);
     expect(formatMod(parseMod(once, "skill.mod"))).toBe(once);
   });
+  test("parses and canonically formats named setup outputs", () => {
+    const text = `skillful 1
 
+skills ./skills
+commands ./commands
+rules ./rules/global_agents.md
+
+setup personal (
+  omit-skill company-database "Work only."
+  pi claude
+)
+
+setup work-mac (
+  root project
+  pi
+
+  claude (
+    skills .claude2/skills
+    commands .claude2/commands
+  )
+)
+`;
+    const mod = parseMod(text, "skill.mod");
+    expect(mod.setups.personal).toMatchObject({
+      name: "personal",
+      root: "home",
+      mode: "omit",
+      selectors: [{ name: "company-database", reason: "Work only." }],
+      harnesses: [{ id: "pi", paths: {} }, { id: "claude", paths: {} }],
+    });
+    expect(mod.setups["work-mac"]?.harnesses[1]).toMatchObject({ id: "claude", paths: { skills: ".claude2/skills", commands: ".claude2/commands" } });
+    expect(formatText(text, "skill.mod")).toBe(text);
+  });
   test.each([
     ["missing header", "skills ./skills", "first semantic directive"],
     ["unknown version", "skillful 2", "unsupported skillful version"],
     ["unknown directive", "skillful 1\nwat nope", "unknown directive"],
     ["duplicate root", "skillful 1\nskills ./a\nskills ./b", "may appear at most once"],
     ["unknown harness", "skillful 1\nharness nope (\n)", "unknown harness"],
+    ["retired harness", "skillful 1\nharness opencode-v2 (\n)", "retired harness"],
+    ["duplicate setup", "skillful 1\nsetup mine (\n pi\n)\nsetup mine (\n claude\n)", "duplicate setup"],
+    ["empty setup", "skillful 1\nsetup mine (\n)", "at least one harness"],
+    ["duplicate setup harness", "skillful 1\nsetup mine (\n pi pi\n)", "duplicate harness"],
+    ["mixed setup selection", "skillful 1\nsetup mine (\n only-skill a\n omit-skill b \"No.\"\n pi\n)", "cannot mix"],
+    ["unsafe setup path", "skillful 1\nsetup mine (\n pi (\n  skills ../escape\n )\n)", "unsafe setup path"],
     ["nested block", "skillful 1\nrequire path:x (\n  only x (\n)", "nested blocks"],
     ["stray close", "skillful 1\n)", "stray block close"],
     ["trailing open", "skillful 1\nharness pi ( trailing", "must be the final token"],

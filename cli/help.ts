@@ -1,7 +1,7 @@
 export const ROOT_AFTER_HELP = `
 Skillful authors skills, commands, and rules once and renders them per harness
-(claude, pi, opencode, opencode-v2). Git is the package manager for other
-people's skill trees: github:, git:, and path: references.
+(claude, pi, opencode). Git is the package manager for other people's skill
+trees: github:, git:, and path: references.
 
 Use skillful when one tree must serve several harnesses, or when you compose
 another tree with your own. Plain files are enough for a single harness.
@@ -18,9 +18,10 @@ Common commands
   skillful init --dir DIR
   skillful add github:owner/repo
   skillful list skills
+  skillful list setups
   skillful inspect <skill>
   skillful render --dry-run
-  skillful install --harness pi --dry-run
+  skillful install work-mac --dry-run
 
 Output defaults to text. Prefer --format json on source commands for automation.
 Per-command details: skillful <command> --help. Longer guides: skillful skills show <topic>.
@@ -91,19 +92,37 @@ Writes a managed build tree only. Live harness destinations are install.
 
 Examples:
   skillful render --dry-run
+  skillful render work-mac
   skillful render --harness pi --out ./rendered
 
 Afterward:
-  skillful install --harness pi --dry-run
+  skillful install work-mac --dry-run
 `;
 
 export const INSTALL_AFTER_HELP = `
-The only command that writes live harness destinations. Records ownership,
-refuses unmanaged or edited collisions, and removes only unchanged stale files.
+The only command that writes live harness destinations. Records exclusive
+ownership, refuses unmanaged or edited collisions, and removes only unchanged
+stale files. Use --path for a nonstandard layout. --remove retires a named setup
+from its receipt; pass --root after deleting its declaration. Removal rejects
+--force because changed owned files always block. An OpenCode install at retired
+opencode-v2 paths adopts that receipt safely.
 
 Examples:
-  skillful install --harness pi --dry-run
+  skillful install work-mac --dry-run
+  skillful install old-work --remove --dry-run
   skillful install --harness pi --root DIR
+  skillful install --harness opencode --path skills=.config/opencode-v2/skills --path commands=.config/opencode-v2/commands
+`;
+
+export const SETUP_AFTER_HELP = `
+A setup declares selected skills, harness outputs, root kind, and path exceptions
+in skill.mod. Showing one is read-only.
+
+Examples:
+  skillful list setups
+  skillful setup show work-mac
+  skillful render work-mac
+  skillful install work-mac --dry-run
 `;
 
 export const INSPECT_AFTER_HELP = `

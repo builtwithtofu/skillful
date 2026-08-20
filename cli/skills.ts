@@ -4,6 +4,7 @@ import deps from "../guides/deps.md" with { type: "text" };
 import inspect from "../guides/inspect.md" with { type: "text" };
 import mod from "../guides/mod.md" with { type: "text" };
 import render from "../guides/render.md" with { type: "text" };
+import setup from "../guides/setup.md" with { type: "text" };
 
 export class SkillGuideError extends Error {
   constructor(message: string, readonly recovery: string) { super(message); }
@@ -23,6 +24,7 @@ const TOPICS: readonly Topic[] = [
   { id: "deps", group: "Project", summary: "Pull other skill trees via Git: add resolves and fetches; fetch and update use exact pins.", markdown: deps },
   { id: "inspect", group: "Verify", summary: "Show one skill as authored or rendered per harness; check validates. Read-only.", markdown: inspect },
   { id: "render", group: "Ship", summary: "Render a managed build tree; only install writes harness destinations. --dry-run first.", markdown: render },
+  { id: "setup", group: "Ship", summary: "Name machine-specific skill selection, harness outputs, roots, and path exceptions.", markdown: setup },
 ];
 
 export function resolveSkillTopic(value: string) {

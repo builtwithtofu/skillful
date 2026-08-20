@@ -14,15 +14,17 @@ import {
   INSTALL_AFTER_HELP,
   RENDER_AFTER_HELP,
   ROOT_AFTER_HELP,
+  SETUP_AFTER_HELP,
   SKILLS_AFTER_HELP,
   UPDATE_AFTER_HELP,
 } from "./help.ts";
-import { installProject } from "./install.ts";
-import { checkCommand, diffCommand, inspectCommand, listCommand, manifestCommand, schemaCommand, type OutputFormat } from "./introspect.ts";
+import { installProject, installSetup, removeSetup, type InstallPaths } from "./install.ts";
+import { checkCommand, diffCommand, inspectCommand, listCommand, manifestCommand, schemaCommand, setupShowCommand, type OutputFormat } from "./introspect.ts";
 import { formatText, type HarnessId } from "./mod.ts";
 import { discoverProject, initProject } from "./project.ts";
 import { renderProject } from "./render.ts";
 import { renderSkillTopic, resolveSkillTopic, skillTree } from "./skills.ts";
+import { resolveSetup } from "./setup.ts";
 
 function collect(value: string, previous: string[] = []) {
   return [...previous, value];
@@ -46,6 +48,15 @@ function assignments(values: string[] | undefined, flag: string) {
 function extraRoots(skills: string[] | undefined, commands: string[] | undefined) {
   const convert = (values: string[] | undefined, flag: string) => Object.entries(assignments(values, flag)).map(([origin, path]) => ({ origin, path }));
   return { skills: convert(skills, "--extra-skill-root"), commands: convert(commands, "--extra-command-root") };
+}
+function installPaths(values: string[] | undefined) {
+  const parsed = assignments(values, "--path");
+  const result: Partial<InstallPaths> = {};
+  for (const [name, path] of Object.entries(parsed)) {
+    if (name !== "skills" && name !== "commands" && name !== "rules") throw new CliUsageError(`unknown --path ${name}`, "Use --path skills=, --path commands=, or --path rules=.");
+    result[name] = path;
+  }
+  return Object.keys(result).length ? result : undefined;
 }
 function harnesses(values: string[] | undefined) {
   const result: HarnessId[] = [];
@@ -187,10 +198,20 @@ export function createProgram() {
 
   program.commandsGroup("Understand:");
   addSourceOptions(program.command("list")
-    .summary("List delivered skills or known harnesses")
-    .description("List delivered skills or public harnesses.")
-    .addArgument(new Argument("<selector>", "skills or harnesses").choices(["skills", "harnesses"])))
-    .action((selector: "skills" | "harnesses", options: SourceOptionValues) => { const source = sourceArguments(options); listCommand(source.project, selector, source); });
+    .summary("List delivered skills, harnesses, or setups")
+    .description("List delivered skills, public harnesses, or named setups.")
+    .addArgument(new Argument("<selector>", "skills, harnesses, or setups").choices(["skills", "harnesses", "setups"])))
+    .action((selector: "skills" | "harnesses" | "setups", options: SourceOptionValues) => { const source = sourceArguments(options); listCommand(source.project, selector, source); });
+
+  const setupCommand = program.command("setup")
+    .summary("Show one named installation setup")
+    .description("Inspect a named setup from skill.mod.")
+    .addHelpText("after", SETUP_AFTER_HELP)
+    .helpCommand(false);
+  addSourceOptions(setupCommand.command("show")
+    .description("Show resolved selection, harness paths, and projected files")
+    .argument("<name>", "setup name"), false)
+    .action((name: string, options: SourceOptionValues) => { const source = sourceArguments(options); setupShowCommand(source.project, name, source); });
 
   addSourceOptions(program.command("inspect")
     .summary("Explain one skill across harnesses")
@@ -231,6 +252,7 @@ export function createProgram() {
     .summary("Write a managed build tree; touches no harnesses")
     .description("Render a managed build tree without installing it.")
     .addHelpText("after", RENDER_AFTER_HELP)
+    .argument("[setup]", "named setup; omit to render the complete project")
     .addOption(new Option("--harness <harness>", "render only this harness; repeatable").argParser(collect))
     .addOption(new Option("--out <directory>", "managed output directory (default: ./rendered)").argParser(collect))
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
@@ -240,10 +262,12 @@ export function createProgram() {
     .addOption(new Option("--override <name=path>", "satisfy a declared dependency from a local path; repeatable").argParser(collect))
     .addOption(internalRootOption("--extra-skill-root <origin=path>", "internal named skill root"))
     .addOption(internalRootOption("--extra-command-root <origin=path>", "internal named command root"))
-    .action((options: { harness?: string[]; out?: string[]; project?: string[]; sourceRoot?: string[]; dryRun?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
+    .action((setup: string | undefined, options: { harness?: string[]; out?: string[]; project?: string[]; sourceRoot?: string[]; dryRun?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
+      if (setup && options.harness?.length) throw new CliUsageError("render cannot mix a setup with --harness", "Choose one named setup or one-off harness selection.");
       const project = discoverProject({ project: one(options.project, "--project"), sourceRoot: one(options.sourceRoot, "--source-root") });
       const result = renderProject(project, {
-        harnesses: harnesses(options.harness),
+        setup,
+        harnesses: options.harness ? harnesses(options.harness) : undefined,
         out: one(options.out, "--out"),
         dryRun: options.dryRun,
         force: options.force,
@@ -254,30 +278,42 @@ export function createProgram() {
     });
 
   program.command("install")
-    .summary("Install one harness into a destination root")
-    .description("Safely install one harness into a destination root.")
+    .summary("Install a setup or one harness into a destination root")
+    .description("Safely install a named setup or one public harness.")
     .addHelpText("after", INSTALL_AFTER_HELP)
-    .requiredOption("--harness <harness>", "harness to install")
-    .addOption(new Option("--root <directory>", "destination root (default: current home)").argParser(collect))
+    .argument("[setup]", "named setup")
+    .option("--harness <harness>", "one-off harness to install")
+    .addOption(new Option("--root <directory>", "destination root (default: setup root or current home)").argParser(collect))
+    .addOption(new Option("--path <category=path>", "override one harness destination; repeatable").argParser(collect))
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
     .addOption(internalRootOption("--source-root <directory>", "source workspace containing the project"))
     .option("--dry-run", "plan without changing installed files or state")
-    .option("--force", "replace listed unmanaged or edited files")
+    .option("--remove", "remove a named setup from its ownership receipt")
+    .option("--force", "replace listed unmanaged or edited files when installing")
     .addOption(new Option("--override <name=path>", "satisfy a declared dependency from a local path; repeatable").argParser(collect))
     .addOption(internalRootOption("--extra-skill-root <origin=path>", "internal named skill root"))
     .addOption(internalRootOption("--extra-command-root <origin=path>", "internal named command root"))
-    .action((options: { harness: string; root?: string[]; project?: string[]; sourceRoot?: string[]; dryRun?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
-      const normalized = normalizeHarness(options.harness);
-      if (normalized.warning) console.error(normalized.warning);
+    .action((setupName: string | undefined, options: { harness?: string; root?: string[]; path?: string[]; project?: string[]; sourceRoot?: string[]; dryRun?: boolean; remove?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project"), sourceRoot: one(options.sourceRoot, "--source-root") });
-      const result = installProject(project, {
-        harness: normalized.name,
-        root: one(options.root, "--root"),
-        dryRun: options.dryRun,
-        force: options.force,
-        overrides: assignments(options.override, "--override"),
-        extraRoots: extraRoots(options.extraSkillRoot, options.extraCommandRoot),
-      });
+      if (options.remove) {
+        if (options.harness) throw new CliUsageError("install --remove cannot mix with --harness", "Pass the retired setup name instead.");
+        if (options.path?.length) throw new CliUsageError("install --remove cannot mix with --path", "Removal uses destinations recorded in the receipt.");
+        if (options.override?.length || options.extraSkillRoot?.length || options.extraCommandRoot?.length) throw new CliUsageError("install --remove cannot mix with source overrides", "Removal reads only the ownership receipt.");
+        if (!setupName) throw new CliUsageError("install --remove needs a setup name", "Pass the exact retired setup name and its original --root if needed.");
+        if (options.force) throw new CliUsageError("install --remove cannot mix with --force", "Restore changed owned files before removal; force never deletes them.");
+        const result = removeSetup(project, setupName, { root: one(options.root, "--root"), dryRun: options.dryRun });
+        printChanges(options.dryRun ? "Would remove from" : "Removed from", result.root, result.changes);
+        return;
+      }
+      if (setupName && options.harness) throw new CliUsageError("install cannot mix a setup with --harness", "Choose one named setup or one-off harness.");
+      if (setupName && options.path?.length) throw new CliUsageError("install cannot mix a setup with --path", "Declare setup path exceptions in skill.mod.");
+      if (!setupName && !options.harness) throw new CliUsageError("install needs a setup name or --harness", `Choose one of: ${Object.keys(project.mod.setups).sort().join(", ") || "no setups declared"}; or pass --harness.`);
+      const overrides = assignments(options.override, "--override");
+      const extra = extraRoots(options.extraSkillRoot, options.extraCommandRoot);
+      const common = { root: one(options.root, "--root"), dryRun: options.dryRun, force: options.force, overrides, extraRoots: extra };
+      const result = setupName
+        ? installSetup(project, resolveSetup(project, setupName, { overrides, extraRoots: extra }), common)
+        : installProject(project, { ...common, harness: normalizeHarness(options.harness!).name, paths: installPaths(options.path) });
       printChanges(options.dryRun ? "Would install into" : "Installed into", result.root, result.changes);
     });
 
