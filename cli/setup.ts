@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { resolvePlan, type ResolveOptions } from "./contract.ts";
+import { harnessPlan, resolvePlan, type ResolveOptions } from "./contract.ts";
 import { loadHarnesses } from "./harness.ts";
 import { pathConflict, resolveInstallPaths, type InstallPaths } from "./install.ts";
 import type { HarnessId } from "./mod.ts";
@@ -33,7 +33,7 @@ export function resolveSetup(project: Project, name: string, options: ResolveOpt
     files[destination] = { harness, artifact };
   };
   for (const output of harnesses) {
-    const harness = plan.harnesses[output.name];
+    const harness = harnessPlan(plan, output.name);
     for (const skill of harness.skills) {
       add(join(output.paths.skills, skill.name, "SKILL.md").replaceAll("\\", "/"), output.name, `${output.name}/skills/${skill.name}/SKILL.md`);
       for (const support of skill.supportFiles) add(join(output.paths.skills, skill.name, support.relativePath).replaceAll("\\", "/"), output.name, `${output.name}/skills/${skill.name}/${support.relativePath.replaceAll("\\", "/")}`);

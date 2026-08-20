@@ -252,7 +252,7 @@ export function createProgram() {
     .summary("Write a managed build tree; touches no harnesses")
     .description("Render a managed build tree without installing it.")
     .addHelpText("after", RENDER_AFTER_HELP)
-    .argument("[setup]", "named setup; omit to render the complete project")
+    .argument("[setup]", "named setup; omit to render harnesses declared in skill.mod")
     .addOption(new Option("--harness <harness>", "render only this harness; repeatable").argParser(collect))
     .addOption(new Option("--out <directory>", "managed output directory (default: ./rendered)").argParser(collect))
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))

@@ -1,7 +1,10 @@
 # render
 
-Render a managed build tree. Only `install` writes live harness destinations.
-`--dry-run` first.
+Render a managed build tree. Without a setup or `--harness`, it contains only the
+harnesses declared in `skill.mod`; no declarations is an error. A named setup
+reconciles its exact set. `--harness` updates only the named outputs and preserves
+other managed renders. Only `install` writes live harness destinations. `--dry-run`
+first.
 
 Not `inspect` (that does not write). Not a substitute for editing sources.
 

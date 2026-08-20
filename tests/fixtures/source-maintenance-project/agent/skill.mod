@@ -7,3 +7,6 @@ rules ./rules/global_agents.md
 require path:../flakes/agent-jj/skills as agent-jj (
   only agent-jj
 )
+
+harness pi (
+)

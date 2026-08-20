@@ -12,8 +12,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { contractFor, resolvePlan, sha256, type ProjectPlan, type ResolveOptions } from "./contract.ts";
-import { HARNESS_IDS, type HarnessId } from "./mod.ts";
+import { contractFor, harnessIds, harnessPlan, resolvePlan, sha256, type ProjectPlan, type ResolveOptions } from "./contract.ts";
+import type { HarnessId } from "./mod.ts";
 import type { Project } from "./project.ts";
 
 export type RenderOptions = ResolveOptions & {
@@ -25,12 +25,12 @@ export type RenderOptions = ResolveOptions & {
 };
 export type RenderChange = { path: string; action: "add" | "change" | "delete" };
 export type RenderResult = { out: string; changes: RenderChange[]; dryRun: boolean };
-type StoredRenderHarnessId = HarnessId | "opencode-v2";
+
 type RenderState = {
   schemaVersion: 1;
   projectRoot: string;
   projectId: string;
-  harness: StoredRenderHarnessId;
+  harness: string;
   files: Record<string, string>;
 };
 
@@ -70,8 +70,8 @@ function copySupport(source: string, target: string) {
   cpSync(source, target, { force: false, errorOnExist: true, preserveTimestamps: false });
 }
 function projectId(project: Project) { return sha256(project.root); }
-function statePath(root: string, harness: StoredRenderHarnessId) { return join(root, harness, ".skillful", "render.json"); }
-function readState(root: string, harness: StoredRenderHarnessId): RenderState | null {
+function statePath(root: string, harness: string) { return join(root, harness, ".skillful", "render.json"); }
+function readState(root: string, harness: string): RenderState | null {
   const path = statePath(root, harness);
   if (!existsSync(path)) return null;
   try {
@@ -82,7 +82,11 @@ function readState(root: string, harness: StoredRenderHarnessId): RenderState | 
     fail(`invalid managed render state: ${path}`, "Move the output aside, or deliberately rerun render with --force.");
   }
 }
-function verifyManaged(root: string, harness: StoredRenderHarnessId, state: RenderState, force: boolean) {
+function managedHarnesses(root: string) {
+  if (!existsSync(root)) return [];
+  return readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && existsSync(statePath(root, entry.name))).map((entry) => entry.name).sort();
+}
+function verifyManaged(root: string, harness: string, state: RenderState, force: boolean) {
   const harnessRoot = resolve(root, harness);
   const unmanaged = filesUnder(harnessRoot).filter((path) => path !== ".skillful/render.json" && !(path in state.files));
   if (unmanaged.length && !force) fail(`managed render contains unmanaged files under ${harness}: ${unmanaged.join(", ")}`, "Move them outside the render tree or deliberately rerun with --force.");
@@ -95,7 +99,7 @@ function verifyManaged(root: string, harness: StoredRenderHarnessId, state: Rend
   }
 }
 function writeHarness(stage: string, plan: ProjectPlan, harness: HarnessId) {
-  const selected = plan.harnesses[harness];
+  const selected = harnessPlan(plan, harness);
   const root = join(stage, harness);
   mkdirSync(join(root, "skills"), { recursive: true });
   mkdirSync(join(root, "commands"), { recursive: true });
@@ -121,7 +125,7 @@ function writeHarness(stage: string, plan: ProjectPlan, harness: HarnessId) {
   const state: RenderState = { schemaVersion: 1, projectRoot: plan.project.root, projectId: projectId(plan.project), harness, files };
   writeText(join(root, ".skillful", "render.json"), `${JSON.stringify(state, null, 2)}\n`);
 }
-function plannedChanges(oldRoot: string | null, nextRoot: string, harnesses: StoredRenderHarnessId[]) {
+function plannedChanges(oldRoot: string | null, nextRoot: string, harnesses: string[]) {
   const changes: RenderChange[] = [];
   for (const harness of harnesses) {
     const oldFiles = oldRoot && existsSync(join(oldRoot, harness)) ? hashesUnder(join(oldRoot, harness)) : {};
@@ -151,24 +155,24 @@ export function commitStagedTree(stage: string, target: string, operations = { r
 }
 
 export function renderProject(project: Project, options: RenderOptions = {}): RenderResult {
-  const plan = resolvePlan(project, options);
   if (options.setup && options.harnesses?.length) fail("render cannot mix a setup with --harness", "Choose one named setup or one-off harness selection.");
-  const configuredSetup = options.setup ? project.mod.setups[options.setup] : undefined;
-  const harnesses = configuredSetup ? configuredSetup.harnesses.map((harness) => harness.id) : options.harnesses?.length ? [...new Set(options.harnesses)] : Object.keys(plan.harnesses) as HarnessId[];
-  const completeRender = !options.setup && !options.harnesses?.length;
-  const managedHarnesses: StoredRenderHarnessId[] = options.setup || completeRender ? [...HARNESS_IDS, "opencode-v2"] : harnesses;
+  const plan = resolvePlan(project, options);
+  const harnesses = harnessIds(plan);
   const target = resolve(project.root, options.out ?? "rendered");
   if (target === project.root) fail(`render output cannot replace the project root: ${target}`, "Choose a separate --out directory.");
   const parent = dirname(target);
   mkdirSync(parent, { recursive: true });
   const stage = join(parent, `.${basename(target)}.skillful-stage-${randomUUID()}`);
   const targetExists = existsSync(target);
+  let ownedHarnesses: string[] = harnesses;
   try {
     if (targetExists) {
       if (!statSync(target).isDirectory()) fail(`render output is not a directory: ${target}`, "Move it aside or choose another --out directory.");
       const existingFiles = filesUnder(target);
-      const states = managedHarnesses.map((harness) => [harness, readState(target, harness)] as const);
-      const unmanaged = existingFiles.length > 0 && states.every(([, state]) => state === null);
+      const existingManaged = managedHarnesses(target);
+      if (!options.harnesses?.length) ownedHarnesses = [...new Set([...existingManaged, ...harnesses])].sort();
+      const states = ownedHarnesses.map((harness) => [harness, readState(target, harness)] as const);
+      const unmanaged = existingFiles.length > 0 && existingManaged.length === 0 && states.every(([, state]) => state === null);
       if (unmanaged && !options.force) fail(`refusing to replace non-empty unmanaged render output: ${target}`, "Choose another --out directory, move it aside, or deliberately rerun with --force.");
       for (const [harness, state] of states) {
         const hasFiles = existsSync(join(target, harness)) && filesUnder(join(target, harness)).length > 0;
@@ -180,9 +184,9 @@ export function renderProject(project: Project, options: RenderOptions = {}): Re
       }
       cpSync(target, stage, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
     } else mkdirSync(stage, { recursive: true });
-    for (const harness of managedHarnesses) rmSync(join(stage, harness), { recursive: true, force: true });
+    for (const harness of ownedHarnesses) rmSync(join(stage, harness), { recursive: true, force: true });
     for (const harness of harnesses) writeHarness(stage, plan, harness);
-    const changes = plannedChanges(targetExists ? target : null, stage, managedHarnesses);
+    const changes = plannedChanges(targetExists ? target : null, stage, ownedHarnesses);
     if (options.dryRun) { rmSync(stage, { recursive: true, force: true }); return { out: target, changes, dryRun: true }; }
     commitStagedTree(stage, target);
     return { out: target, changes, dryRun: false };

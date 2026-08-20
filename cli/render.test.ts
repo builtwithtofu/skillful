@@ -24,8 +24,8 @@ describe("TypeScript renderer", () => {
     const plan = resolvePlan(resolved);
     const contract = contractFor(plan);
     expect(contract.schemaVersion).toBe(1);
-    expect(contract.manifest.harnesses.pi.assets).toEqual([]);
-    expect(contract.manifest.harnesses.pi.skills.map((skill) => skill.name)).toContain("example");
+    expect(contract.manifest.harnesses.pi?.assets).toEqual([]);
+    expect(contract.manifest.harnesses.pi?.skills.map((skill) => skill.name)).toContain("example");
 
     renderProject(resolved);
     const claude = text(join(project, "rendered", "claude", "skills", "example", "SKILL.md"));
@@ -45,6 +45,30 @@ describe("TypeScript renderer", () => {
     expect(text(join(project, "rendered", "pi", "commands", "example.md"))).toContain("Use the `example` skill.");
     expect(text(join(project, "rendered", "pi", "rules.md"))).toContain("This line demonstrates rules rendering.");
     expect(text(join(project, "rendered", "pi", "skills", "example", "references", "guide.md"))).toContain("copied without rendering");
+  });
+
+  test("renders only harnesses declared by the project by default", () => {
+    const { project } = fixture();
+    writeFileSync(join(project, "skill.mod"), `skillful 1
+
+skills ./skills
+commands ./commands
+rules ./rules/global_agents.md
+
+harness pi (
+  token audience "Pi"
+)
+`);
+
+    const plan = resolvePlan(discoverProject({ project }));
+    const contract = contractFor(plan);
+    renderProject(discoverProject({ project }));
+
+    expect(Object.keys(plan.harnesses)).toEqual(["pi"]);
+    expect(Object.keys(contract.manifest.harnesses)).toEqual(["pi"]);
+    expect(contract.schema.harnesses.codex.commandMerge).toBe("skill");
+    expect(existsSync(join(project, "rendered", "pi", "skills", "example", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(project, "rendered", "codex"))).toBe(false);
   });
 
   test("renders Codex skills, fences, and standalone commands as skills", () => {
@@ -191,20 +215,34 @@ setup personal (
     expect(existsSync(join(project, "rendered", "claude"))).toBe(false);
     expect(existsSync(join(project, "rendered", "opencode"))).toBe(false);
   });
-  test("removes a retired managed OpenCode render", () => {
+  test("a targeted harness render preserves other managed outputs", () => {
+    const { project, resolved } = fixture();
+    renderProject(resolved);
+    const claudeSkill = join(project, "rendered", "claude", "skills", "example", "SKILL.md");
+    writeFileSync(claudeSkill, `${text(claudeSkill)}\nLocal edit.\n`);
+
+    const dry = renderProject(resolved, { harnesses: ["pi"], dryRun: true });
+    expect(dry.changes.some((change) => change.path.startsWith("claude/"))).toBe(false);
+
+    renderProject(resolved, { harnesses: ["pi"] });
+    expect(text(claudeSkill)).toEndWith("Local edit.\n");
+    expect(existsSync(join(project, "rendered", "opencode", "skills", "example", "SKILL.md"))).toBe(true);
+  });
+
+  test("removes any retired managed harness render", () => {
     const { project, resolved } = fixture();
     renderProject(resolved);
     const rendered = join(project, "rendered");
-    renameSync(join(rendered, "opencode"), join(rendered, "opencode-v2"));
-    const statePath = join(rendered, "opencode-v2", ".skillful", "render.json");
+    renameSync(join(rendered, "opencode"), join(rendered, "retired-harness"));
+    const statePath = join(rendered, "retired-harness", ".skillful", "render.json");
     const state = JSON.parse(text(statePath)) as Record<string, unknown>;
-    state.harness = "opencode-v2";
+    state.harness = "retired-harness";
     writeFileSync(statePath, `${JSON.stringify(state)}\n`);
 
     const dry = renderProject(resolved, { dryRun: true });
-    expect(dry.changes.some((change) => change.action === "delete" && change.path.startsWith("opencode-v2/"))).toBe(true);
+    expect(dry.changes.some((change) => change.action === "delete" && change.path.startsWith("retired-harness/"))).toBe(true);
     renderProject(resolved);
-    expect(existsSync(join(rendered, "opencode-v2"))).toBe(false);
+    expect(existsSync(join(rendered, "retired-harness"))).toBe(false);
   });
 
 

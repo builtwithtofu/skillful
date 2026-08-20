@@ -52,6 +52,30 @@ describe("top-level introspection", () => {
     expect(compared.harnesses.claude.status).toBe("identical");
     expect(compared.harnesses.pi.status).toBe("changed");
   });
+  test("public harness discovery works when the project selects no outputs", () => {
+    const project = fixture();
+    writeFileSync(join(project, "skill.mod"), `skillful 1
+
+skills ./skills
+commands ./commands
+rules ./rules/global_agents.md
+`);
+
+    const listedHarnesses = run(project, "list", "harnesses");
+    expect(listedHarnesses.exitCode).toBe(0);
+    expect(stdout(listedHarnesses)).toBe("claude\ncodex\ncursor\ngrok\nopencode\npi\n");
+    const codex = json(run(project, "list", "harnesses", "--format", "json")).harnesses.find((harness: { name: string }) => harness.name === "codex");
+    expect(codex.profile.installPaths.project.skills).toBe(".agents/skills");
+    expect(codex.profile.exclusions).toBeUndefined();
+    expect(run(project, "schema").exitCode).toBe(0);
+
+    for (const args of [["check", "--strict"], ["list", "skills"], ["manifest"]]) {
+      const result = run(project, ...args);
+      expect(result.exitCode).toBe(1);
+      expect(stderr(result)).toContain("project selects no harnesses");
+    }
+  });
+
 
   test("JSON usage and runtime errors remain one parseable stdout document", () => {
     const project = fixture();

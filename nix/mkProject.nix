@@ -133,12 +133,14 @@ let
   forHarness = name:
     if !(builtins.hasAttr name facts)
     then throw "unknown skillful harness ${name}; known: ${lib.concatStringsSep ", " harnesses}"
-    else {
-      installPaths = facts.${name}.installPaths.home;
-      skills = "${rendered}/${name}/skills";
-      commands = "${rendered}/${name}/commands";
-      rules = "${rendered}/${name}/rules.md";
-    };
+    else
+      let harnessRendered = renderTree "skillful-${name}-render" [ "--harness" name ];
+      in {
+        installPaths = facts.${name}.installPaths.home;
+        skills = "${harnessRendered}/${name}/skills";
+        commands = "${harnessRendered}/${name}/commands";
+        rules = "${harnessRendered}/${name}/rules.md";
+      };
   forSetup = name:
     if !(builtins.hasAttr name setupDeclarations)
     then throw "unknown skillful setup ${name}; known: ${lib.concatStringsSep ", " setupNames}"
@@ -199,7 +201,18 @@ let
       esac
     '';
   };
-  contract = "${rendered}/pi/.skillful";
+  contract = pkgs.runCommand "skillful-project-contract" {
+    nativeBuildInputs = [ engineCli pkgs.jq ];
+    inherit projectSource projectRoot;
+  } ''
+    export HOME="$TMPDIR/home"
+    export XDG_CACHE_HOME="$TMPDIR/cache"
+    export XDG_STATE_HOME="$TMPDIR/state"
+    mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$out"
+    skillful schema --format json ${escapedProjectArgs} > "$TMPDIR/schema.json"
+    skillful manifest --format json ${escapedProjectArgs} > "$TMPDIR/manifest.json"
+    jq -s '{ schemaVersion: 1, schema: .[0].schema, manifest: { setups: .[1].setups, harnesses: .[1].harnesses } }' "$TMPDIR/schema.json" "$TMPDIR/manifest.json" > "$out/contract.json"
+  '';
   checks = {
     render = rendered;
     strict = pkgs.runCommand "skillful-project-strict-check" { nativeBuildInputs = [ cli ]; } ''
