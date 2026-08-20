@@ -80,6 +80,19 @@ checks.${system} = project.checks;
 
 pi = project.forHarness "pi";
 # pi = { installPaths; skills; commands; rules; }
+
+personal = project.forSetup "personal";
+workMac = project.forSetup "work-mac";
+# setup = { name; root; harnesses; rendered; outputs; files; }
+```
+
+A Home Manager configuration can consume a home-root setup without restating its
+paths:
+
+```nix
+home.file = pkgs.lib.mapAttrs (_: file: {
+  inherit (file) source recursive;
+}) personal.files;
 ```
 
 ```sh
@@ -90,6 +103,9 @@ nix run .#skillful -- update angular
 ```
 
 `nix build` is the complete render. Each harness view is a path inside it.
+`project.forSetup` evaluates the named declaration directly from `skill.mod`, then
+builds only that setup through the same renderer. Its destination-keyed `files`
+map is ordinary Nix data; evaluation never runs the CLI or reads a derivation.
 `nix run .#skillful -- update` writes `skill.lock` through the Skillful CLI.
 `nix flake update` does not move skill pins.
 

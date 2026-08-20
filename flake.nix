@@ -36,6 +36,43 @@
           skillful = import ./nix/package.nix { inherit pkgs; src = self; };
           bunDeps = import ./nix/bun-deps.nix { inherit pkgs; };
           fixture = mkProject { inherit pkgs; src = ./templates/basic; };
+          setupFixture = mkProject {
+            inherit pkgs;
+            src = self;
+            projectDir = "tests/fixtures/setup-project";
+          };
+          personalSetup = setupFixture.forSetup "personal";
+          workSetup = setupFixture.forSetup "work-mac";
+          uppercaseSetup = setupFixture.forSetup "uppercase";
+          projectionFor = setup: {
+            schemaVersion = 1;
+            setup = {
+              inherit (setup) name root selection;
+              harnesses = map (name: { inherit name; paths = setup.installPaths.${name}; }) setup.harnesses;
+            };
+          };
+          consumeSetup = name: setup: pkgs.runCommand "skillful-${name}-destination-map" { } (''
+            mkdir -p "$out"
+          '' + pkgs.lib.concatStrings (pkgs.lib.mapAttrsToList (destination: file: ''
+            destination=${pkgs.lib.escapeShellArg destination}
+            target="$out/$destination"
+            mkdir -p "$(dirname "$target")"
+            ${if file.recursive then "cp -r" else "cp"} ${pkgs.lib.escapeShellArg (toString file.source)} "$target"
+          '') setup.files));
+          personalHome = consumeSetup "personal" personalSetup;
+          workProject = consumeSetup "work-mac" workSetup;
+          parseSetupMod = import ./nix/parseMod.nix {
+            lib = pkgs.lib;
+            facts = { claude = { }; opencode = { }; pi = { }; };
+          };
+          invalidUnsafe = builtins.tryEval (builtins.deepSeq (parseSetupMod ./tests/fixtures/setup-mod/unsafe/skill.mod) true);
+          invalidMixed = builtins.tryEval (builtins.deepSeq (parseSetupMod ./tests/fixtures/setup-mod/mixed/skill.mod) true);
+          invalidRootHome = builtins.tryEval (builtins.deepSeq (parseSetupMod ./tests/fixtures/setup-mod/root-home/skill.mod) true);
+          unknownSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "missing") true);
+          overlappingSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "overlap") true);
+          nestedOverlappingSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "nested-overlap") true);
+          rootWideSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "root-wide") true);
+          setupSourcesInsideRender = setup: builtins.all (file: pkgs.lib.hasPrefix "${setup.rendered}/" (toString file.source)) (builtins.attrValues setup.files);
           lockedFixture = mkProject { inherit pkgs; src = ./tests/fixtures/locked-project; };
           sourceMaintenanceFixture = mkProject {
             inherit pkgs;
@@ -130,6 +167,51 @@
             touch "$out"
           '';
           fixture-strict = fixture.checks.strict;
+          setup-projection =
+            assert !invalidUnsafe.success;
+            assert !invalidMixed.success;
+            assert !invalidRootHome.success;
+            assert !unknownSetup.success;
+            assert !overlappingSetup.success;
+            assert !nestedOverlappingSetup.success;
+            assert !rootWideSetup.success;
+            assert setupSourcesInsideRender personalSetup;
+            assert setupSourcesInsideRender workSetup;
+            pkgs.runCommand "skillful-setup-projection-check" {
+              nativeBuildInputs = [ setupFixture.cli pkgs.jq pkgs.diffutils ];
+              expectedSetups = builtins.toJSON {
+                personal = projectionFor personalSetup;
+                work-mac = projectionFor workSetup;
+                uppercase = projectionFor uppercaseSetup;
+              };
+            } ''
+              printf '%s\n' "$expectedSetups" > expected.json
+              for name in personal work-mac uppercase; do
+                skillful setup show "$name" --format json \
+                  | jq -S '{ schemaVersion, setup: { name: .setup.name, root: .setup.root, selection: .setup.selection, harnesses: .setup.harnesses } }' \
+                  > "$name-cli.json"
+                jq -S --arg name "$name" '.[$name]' expected.json > "$name-nix.json"
+                diff -u "$name-nix.json" "$name-cli.json"
+              done
+
+              for project in ${./tests/fixtures/setup-mod/unsafe} ${./tests/fixtures/setup-mod/mixed} ${./tests/fixtures/setup-mod/root-home}; do
+                if skillful fmt --check --project "$project"; then exit 1; fi
+              done
+              for name in overlap nested-overlap root-wide; do
+                if skillful setup show "$name" --format json; then exit 1; fi
+              done
+
+              test -f ${personalSetup.rendered}/pi/skills/example/SKILL.md
+              test ! -e ${personalSetup.rendered}/pi/skills/hidden
+              test -f ${workSetup.rendered}/claude/skills/hidden/SKILL.md
+              test -f ${uppercaseSetup.rendered}/pi/skills/Upper/SKILL.md
+              test ! -e ${uppercaseSetup.rendered}/pi/skills/example
+              test -f ${personalHome}/.pi/agent/skills/example/SKILL.md
+              test ! -e ${personalHome}/.pi/agent/skills/hidden
+              test -f ${workProject}/.claude2/skills/hidden/SKILL.md
+              test ${pkgs.lib.escapeShellArg workSetup.root} = project
+              touch "$out"
+            '';
           locked-render = pkgs.runCommand "skillful-locked-render-check" { } ''
             test -f ${lockedFixture.rendered}/pi/skills/local/SKILL.md
             test -f ${lockedFixture.rendered}/pi/skills/angular-developer/SKILL.md

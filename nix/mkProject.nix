@@ -16,6 +16,7 @@ let
     else value;
   projectSource = storePath "project" src;
   projectRoot = projectSource + "/${projectDir}";
+  declarationRoot = "${src}/${projectDir}";
   harnessDir = ../harnesses;
   harnessFiles = builtins.attrNames (lib.filterAttrs (name: type: type == "regular" && lib.hasSuffix ".json" name) (builtins.readDir harnessDir));
   facts = builtins.listToAttrs (map (file:
@@ -25,6 +26,12 @@ let
       inherit value;
     }) harnessFiles);
   harnesses = builtins.attrNames facts;
+  setupDeclarations = (import ./parseMod.nix { inherit lib facts; }) (declarationRoot + "/skill.mod");
+  setupNames = builtins.attrNames setupDeclarations;
+  pathConflict = left: right:
+    left == "." || right == "." || left == right
+    || lib.hasPrefix "${left}/" right
+    || lib.hasPrefix "${right}/" left;
   checkedExtraRoots = {
     skills = map (entry:
       if !(entry ? origin) || entry.origin == "" || !(entry ? src)
@@ -102,7 +109,7 @@ let
     ++ lib.concatMap (entry: [ "--extra-command-root" "${entry.origin}=${toString entry.src}" ]) normalizedExtraRoots.commands;
   projectArgs = [ "--project" (toString projectRoot) "--source-root" (toString projectSource) ] ++ overrideArgs ++ extraArgs;
   escapedProjectArgs = lib.escapeShellArgs projectArgs;
-  rendered = pkgs.runCommand "skillful-project-render" {
+  renderTree = derivationName: renderArgs: pkgs.runCommand derivationName {
     nativeBuildInputs = [ engineCli ];
     inherit projectSource projectRoot;
     dependencySources = builtins.attrValues resolvedOverrides;
@@ -112,9 +119,10 @@ let
     export XDG_CACHE_HOME="$TMPDIR/cache"
     export XDG_STATE_HOME="$TMPDIR/state"
     mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
-    skillful render --project "$projectRoot" --source-root "$projectSource" --out "$TMPDIR/rendered" ${lib.escapeShellArgs (overrideArgs ++ extraArgs)}
+    skillful render ${lib.escapeShellArgs renderArgs} --project "$projectRoot" --source-root "$projectSource" --out "$TMPDIR/rendered" ${lib.escapeShellArgs (overrideArgs ++ extraArgs)}
     cp -r "$TMPDIR/rendered" "$out"
   '';
+  rendered = renderTree "skillful-project-render" [ ];
   forHarness = name:
     if !(builtins.hasAttr name facts)
     then throw "unknown skillful harness ${name}; known: ${lib.concatStringsSep ", " harnesses}"
@@ -124,12 +132,58 @@ let
       commands = "${rendered}/${name}/commands";
       rules = "${rendered}/${name}/rules.md";
     };
+  forSetup = name:
+    if !(builtins.hasAttr name setupDeclarations)
+    then throw "unknown skillful setup ${name}; known: ${lib.concatStringsSep ", " setupNames}"
+    else
+      let
+        setup = setupDeclarations.${name};
+        resolvedHarnesses = map (harness: harness // {
+          paths = facts.${harness.name}.installPaths // harness.paths;
+        }) setup.harnesses;
+        setupRendered = renderTree "skillful-setup-${name}-render" [ name ];
+        entries = lib.concatMap (harness: lib.mapAttrsToList (category: destination: {
+          inherit category destination;
+          harness = harness.name;
+          recursive = category != "rules";
+          source = "${setupRendered}/${harness.name}/${if category == "rules" then "rules.md" else category}";
+        }) harness.paths) resolvedHarnesses;
+        destinations = map (entry: entry.destination) entries;
+        duplicateDestinations = builtins.length destinations != builtins.length (lib.unique destinations);
+        overlappingDestinations = builtins.any (left: builtins.any (right:
+          left != right && pathConflict left right
+        ) destinations) destinations;
+        files = builtins.listToAttrs (map (entry: {
+          name = entry.destination;
+          value = builtins.removeAttrs entry [ "destination" ];
+        }) entries);
+        outputs = builtins.listToAttrs (map (harness: {
+          name = harness.name;
+          value = {
+            installPaths = harness.paths;
+            skills = "${setupRendered}/${harness.name}/skills";
+            commands = "${setupRendered}/${harness.name}/commands";
+            rules = "${setupRendered}/${harness.name}/rules.md";
+          };
+        }) resolvedHarnesses);
+      in if duplicateDestinations
+      then throw "skillful setup ${name} has duplicate destinations"
+      else if overlappingDestinations
+      then throw "skillful setup ${name} has overlapping destinations"
+      else {
+        inherit name outputs files;
+        root = setup.root;
+        selection = setup.selection;
+        harnesses = map (harness: harness.name) resolvedHarnesses;
+        installPaths = builtins.listToAttrs (map (harness: { name = harness.name; value = harness.paths; }) resolvedHarnesses);
+        rendered = setupRendered;
+      };
   cli = pkgs.writeShellApplication {
     name = "skillful";
     runtimeInputs = [ engineCli ];
     text = ''
       case "''${1-}" in
-        list|inspect|check|diff|manifest|schema|render|install) exec ${engineCli}/bin/skillful "$@" ${escapedProjectArgs} ;;
+        list|setup|inspect|check|diff|manifest|schema|render|install) exec ${engineCli}/bin/skillful "$@" ${escapedProjectArgs} ;;
         *) exec ${engineCli}/bin/skillful "$@" ;;
       esac
     '';
@@ -143,6 +197,7 @@ let
   };
 in
 {
-  inherit harnesses forHarness cli contract checks rendered;
+  inherit harnesses forHarness forSetup cli contract checks rendered;
+  setups = setupNames;
   installPaths = builtins.mapAttrs (_: value: value.installPaths) facts;
 }
