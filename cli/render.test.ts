@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { discoverProject } from "./project.ts";
 import { commitStagedTree, renderProject, RenderOutputError } from "./render.ts";
-import { contractFor, resolvePlan } from "./contract.ts";
+import { contractFor, harnessPlan, resolvePlan } from "./contract.ts";
 import { copyBasicFixture } from "./test-fixture.ts";
 
 const roots: string[] = [];
@@ -142,13 +142,35 @@ harness pi (
     expect(rendered).not.toContain("Standalone command.");
   });
 
-  test("reads skill metadata after rendering harness markup", () => {
+  test("renders harness markup before parsing frontmatter", () => {
     const { project } = fixture();
-    writeFileSync(join(project, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: {{audience}}\n---\n\n# Example\n");
+    rmSync(join(project, "skills", "example", "COMMAND.md"));
+    writeFileSync(join(project, "skills", "example", "SKILL.md"), `---
+name: example
+description: >-
+  {{audience}} metadata so the fence is not the first field.
+{{#claude}}
+disable-model-invocation: true
+{{/}}
+{{#opencode}}
+user-invocable: false
+{{/}}
+---
 
-    const plan = resolvePlan(discoverProject({ project }), { harnesses: ["codex"] });
+Body.
+`);
+    const resolved = discoverProject({ project });
+    const plan = resolvePlan(resolved, { harnesses: ["claude", "opencode", "pi"] });
+    expect(harnessPlan(plan, "claude").skills.find((skill) => skill.name === "example")?.description).toBe("Claude Code metadata so the fence is not the first field.");
 
-    expect(plan.harnesses.codex.skills.find((skill) => skill.name === "example")?.description).toBe("Codex");
+    renderProject(resolved, { harnesses: ["claude", "opencode", "pi"] });
+
+    const claude = text(join(project, "rendered", "claude", "skills", "example", "SKILL.md"));
+    const opencode = text(join(project, "rendered", "opencode", "skills", "example", "SKILL.md"));
+    expect(claude).toContain("disable-model-invocation: true");
+    expect(opencode).not.toContain("disable-model-invocation");
+    expect(existsSync(join(project, "rendered", "opencode", "commands", "example.md"))).toBe(false);
+    expect(existsSync(join(project, "rendered", "pi", "commands", "example.md"))).toBe(true);
   });
 
   test("validates Agent Skill names only for selected harnesses", () => {

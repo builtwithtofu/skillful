@@ -267,8 +267,8 @@ function injectCommand(id: HarnessId, facts: HarnessFacts, tokens: Record<string
   if (hint && !existing.some((line) => keyOf(line) === "argument-hint") && facts.skillFrontmatter.includes("argument-hint")) existing.push(`argument-hint: ${hint}`);
   return `---\n${existing.join("\n")}\n---\n\n${bodyOf(command)}\n\n${bodyOf(skillText)}`;
 }
-function router(facts: HarnessFacts, name: string, skillRaw: string) {
-  const hint = frontmatterValue("argument-hint", skillRaw);
+function router(facts: HarnessFacts, name: string, renderedSkill: string) {
+  const hint = frontmatterValue("argument-hint", renderedSkill);
   const fm = [`description: Run the ${name} workflow`];
   if (hint && facts.commandFrontmatter.includes("argument-hint")) fm.push(`argument-hint: ${hint}`);
   return `---\n${fm.join("\n")}\n---\n\nUse the \`${name}\` skill.\n\n${facts.argSyntax}\n`;
@@ -387,8 +387,9 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
   if (facts.commandMerge === "file") for (const entry of canonicalEntries) {
     if (covered.has(entry.name) || omittedCommands.has(entry.name) || omittedCommands.has(`${entry.name}.md`)) continue;
     const raw = readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8");
-    if (frontmatterValue("user-invocable", raw) === "false") continue;
-    const body = router(facts, entry.name, raw);
+    const rendered = renderText(id, facts, tokens, raw);
+    if (frontmatterValue("user-invocable", rendered) === "false") continue;
+    const body = router(facts, entry.name, rendered);
     commands.push({ name: `${entry.name}.md`, source: { kind: "generated", origin: "canonical", path: null }, delivery: { kind: "file", path: `${commandRoot!}/${entry.name}.md` }, sha256: sha256(body), frontmatter: { source: [], retained: frontmatterKeys(body), omitted: [], rendered: frontmatterKeys(body) }, transformations: { fences: [], tokens: [], argSyntax: null, command: ["router-generated"] }, body });
   }
   uniqueByName(commands.map((command) => ({ name: command.name, origin: command.source.origin ?? command.source.kind })), `delivered command for ${id}`);
