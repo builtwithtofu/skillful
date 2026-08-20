@@ -3,8 +3,8 @@
 Author agent skills once, render them per harness.
 
 You write skills, commands, and rules in one project. Skillful renders that
-corpus for each harness: `claude`, `pi`, `opencode`, `opencode-v2`. Other
-people's trees come in through Git (`github:`, `git:`, `path:`).
+corpus for each harness: `claude`, `pi`, `opencode`. Other people's trees come
+in through Git (`github:`, `git:`, `path:`).
 
 Plain files are enough for a single harness. Use skillful when one tree must
 serve several harnesses, or when you compose another tree with your own.
@@ -41,13 +41,17 @@ skillful init --dir ./agent
 cd ./agent
 skillful add github:owner/repo
 skillful list skills
-skillful inspect skill-name
-skillful render --dry-run
-skillful install --harness pi --dry-run
+skillful list setups
+skillful setup show work-mac
+skillful render work-mac --dry-run
+skillful install work-mac --dry-run
+skillful install old-work --remove --dry-run
 ```
 
 `skillful --help` orients. `skillful <command> --help` is the flag reference.
-For a job map, run `skillful skills tree`, then `skillful skills show <topic>`.
+Named setups keep machine-specific selection and harness paths in `skill.mod`;
+`install --harness` remains the one-off form. For a job map, run `skillful skills
+tree`, then `skillful skills show <topic>`.
 
 Only `add` and `update` resolve revisions. `fetch` retrieves exact pins.
 Inspection, check, render, and install never resolve.

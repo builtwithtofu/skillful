@@ -46,6 +46,48 @@ describe("TypeScript renderer", () => {
     expect(text(join(project, "rendered", "pi", "rules.md"))).toContain("This line demonstrates rules rendering.");
     expect(text(join(project, "rendered", "pi", "skills", "example", "references", "guide.md"))).toContain("copied without rendering");
   });
+  test("renders only a named setup and removes harnesses outside it", () => {
+    const { project, resolved } = fixture();
+    renderProject(resolved);
+    writeFileSync(join(project, "skill.mod"), `${text(join(project, "skill.mod"))}
+setup personal (
+  omit-skill hidden "Not here."
+  pi
+)
+`);
+    const selected = discoverProject({ project });
+    const unmanaged = join(project, "rendered", "claude", "local.txt");
+    writeFileSync(unmanaged, "mine");
+    expect(() => renderProject(selected, { setup: "personal" })).toThrow("unmanaged files");
+    expect(text(unmanaged)).toBe("mine");
+    rmSync(unmanaged);
+    const dry = renderProject(selected, { setup: "personal", dryRun: true });
+    expect(dry.changes.some((change) => change.action === "delete" && change.path.startsWith("claude/"))).toBe(true);
+    expect(existsSync(join(project, "rendered", "claude"))).toBe(true);
+
+    renderProject(selected, { setup: "personal" });
+    expect(existsSync(join(project, "rendered", "pi", "skills", "example", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(project, "rendered", "pi", "skills", "hidden", "SKILL.md"))).toBe(false);
+    expect(existsSync(join(project, "rendered", "claude"))).toBe(false);
+    expect(existsSync(join(project, "rendered", "opencode"))).toBe(false);
+  });
+  test("removes a retired managed OpenCode render", () => {
+    const { project, resolved } = fixture();
+    renderProject(resolved);
+    const rendered = join(project, "rendered");
+    renameSync(join(rendered, "opencode"), join(rendered, "opencode-v2"));
+    const statePath = join(rendered, "opencode-v2", ".skillful", "render.json");
+    const state = JSON.parse(text(statePath)) as Record<string, unknown>;
+    state.harness = "opencode-v2";
+    writeFileSync(statePath, `${JSON.stringify(state)}\n`);
+
+    const dry = renderProject(resolved, { dryRun: true });
+    expect(dry.changes.some((change) => change.action === "delete" && change.path.startsWith("opencode-v2/"))).toBe(true);
+    renderProject(resolved);
+    expect(existsSync(join(rendered, "opencode-v2"))).toBe(false);
+  });
+
+
 
   test("preserves multiline values of supported frontmatter fields", () => {
     const { project } = fixture();

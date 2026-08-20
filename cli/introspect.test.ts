@@ -26,7 +26,7 @@ describe("top-level introspection", () => {
 
     const listedHarnesses = run(project, "list", "harnesses");
     expect(listedHarnesses.exitCode).toBe(0);
-    expect(stdout(listedHarnesses)).toBe("claude\nopencode\nopencode-v2\npi\n");
+    expect(stdout(listedHarnesses)).toBe("claude\nopencode\npi\n");
 
     const inspected = run(project, "inspect", "example", "--harness", "pi", "--rendered", "--format", "json");
     expect(inspected.exitCode).toBe(0);
@@ -41,7 +41,7 @@ describe("top-level introspection", () => {
     expect(manifest.harnesses.claude.assets).toEqual([]);
 
     const schema = json(run(project, "schema", "--format", "json"));
-    expect(schema.schema.harnesses["opencode-v2"].commandMerge).toBe("file");
+    expect(schema.schema.harnesses.opencode.commandMerge).toBe("file");
 
     const compared = json(run(project, "diff", "example", "--format", "json"));
     expect(compared.harnesses.claude.status).toBe("identical");

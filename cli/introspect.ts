@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import { contractFor, resolvePlan, sha256, type ResolveOptions } from "./contract.ts";
 import type { HarnessId } from "./mod.ts";
 import { discoverProject, type Project } from "./project.ts";
+import { resolveSetup } from "./setup.ts";
 
 export type OutputFormat = "text" | "json";
 export class IntrospectionError extends Error { constructor(message: string, readonly recovery: string) { super(message); } }
@@ -19,8 +20,11 @@ export function manifestCommand(project: Project, options: ResolveOptions & { ha
   const plan = resolvePlan(project, options);
   const contract = contractFor(plan);
   const ids = selectedHarnesses(plan, options.harnesses);
-  const manifest = { schemaVersion: 1, harnesses: Object.fromEntries(ids.map((id) => [id, contract.manifest.harnesses[id]])) };
-  emit(manifest, options.format, () => ids.map((id) => `${id}: ${plan.harnesses[id].skills.length} skills, ${plan.harnesses[id].commands.length} commands`).join("\n"));
+  const manifest = { schemaVersion: 1, setups: contract.manifest.setups, harnesses: Object.fromEntries(ids.map((id) => [id, contract.manifest.harnesses[id]])) };
+  emit(manifest, options.format, () => [
+    ...Object.keys(manifest.setups).map((name) => `setup ${name}`),
+    ...ids.map((id) => `${id}: ${plan.harnesses[id].skills.length} skills, ${plan.harnesses[id].commands.length} commands`),
+  ].join("\n"));
 }
 export function schemaCommand(project: Project, options: ResolveOptions & { format: OutputFormat }) {
   const schema = contractFor(resolvePlan(project, options)).schema;
@@ -33,7 +37,12 @@ function listedSkillEntry(plan: ReturnType<typeof resolvePlan>, id: HarnessId, n
   const omission = plan.harnesses[id].omittedSkills[name];
   return [id, omission ? { status: "omitted", reason: omission.message } : { status: "absent" }];
 }
-export function listCommand(project: Project, selector: "skills" | "harnesses", options: ResolveOptions & { harnesses?: HarnessId[] | undefined; format: OutputFormat }) {
+export function listCommand(project: Project, selector: "skills" | "harnesses" | "setups", options: ResolveOptions & { harnesses?: HarnessId[] | undefined; format: OutputFormat }) {
+  if (selector === "setups") {
+    const names = Object.keys(project.mod.setups).sort();
+    emit({ schemaVersion: 1, setups: names }, options.format, () => names.join("\n"));
+    return;
+  }
   const plan = resolvePlan(project, options);
   const ids = selectedHarnesses(plan, options.harnesses);
   if (selector === "harnesses") {
@@ -51,6 +60,15 @@ export function listCommand(project: Project, selector: "skills" | "harnesses", 
   });
   emit({ schemaVersion: 1, skills: rows.map((row) => row.value) }, options.format, () => rows.map((row) => row.text).join("\n"));
 }
+export function setupShowCommand(project: Project, name: string, options: ResolveOptions & { format: OutputFormat }) {
+  const setup = resolveSetup(project, name, options);
+  emit({ schemaVersion: 1, setup }, options.format, () => [
+    `${setup.name}: root=${setup.root} selection=${setup.selection.mode}`,
+    ...setup.harnesses.map((harness) => `${harness.name}: ${Object.entries(harness.paths).map(([kind, path]) => `${kind}=${path}`).join(" ")}`),
+    ...Object.entries(setup.files).map(([path, file]) => `${path}\t${file.harness}:${file.artifact}`),
+  ].join("\n"));
+}
+
 type Inspection =
   | { status: "included"; skill: ReturnType<typeof publicSkill> }
   | { status: "omitted"; omission: { code: string; message: string } }

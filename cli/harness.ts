@@ -1,6 +1,5 @@
 import claude from "../harnesses/claude.json";
 import opencode from "../harnesses/opencode.json";
-import opencodeV2 from "../harnesses/opencode-v2.json";
 import pi from "../harnesses/pi.json";
 import { HARNESS_IDS, type HarnessId } from "./mod.ts";
 
@@ -12,12 +11,11 @@ export type HarnessFacts = {
   commandFrontmatter: string[];
   commandMerge: "inject" | "file";
 };
-export class HarnessError extends Error { constructor(message: string, readonly recovery = "Choose one of: claude, pi, opencode, opencode-v2.") { super(message); } }
+export class HarnessError extends Error { constructor(message: string, readonly recovery = `Choose one of: ${HARNESS_IDS.join(", ")}.`) { super(message); } }
 
 const EMBEDDED_FACTS: ReadonlyArray<readonly [string, unknown]> = [
   ["claude.json", claude],
   ["opencode.json", opencode],
-  ["opencode-v2.json", opencodeV2],
   ["pi.json", pi],
 ];
 function validate(candidate: unknown, path: string): HarnessFacts {
@@ -47,7 +45,10 @@ export function loadHarnesses(): Record<HarnessId, HarnessFacts> {
 }
 
 export function normalizeHarness(input: string): { name: HarnessId; warning?: string } {
-  if (input === "opencodev2") throw new HarnessError("retired harness opencodev2; use opencode-v2");
+  if (input === "opencode-v2") throw new HarnessError(
+    "retired harness: opencode-v2",
+    "Use opencode. Keep the retired layout with --path skills=.config/opencode-v2/skills --path commands=.config/opencode-v2/commands.",
+  );
   if (!(HARNESS_IDS as readonly string[]).includes(input)) throw new HarnessError(`unknown harness: ${input}`);
   return { name: input as HarnessId };
 }
