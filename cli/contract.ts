@@ -83,7 +83,7 @@ export type HarnessPlan = {
   rules: { source: Source; delivery: { kind: "file"; path: string } | null; sha256: string; body: string };
   assets: never[];
 };
-export type ProjectPlan = { project: Project; harnesses: Record<HarnessId, HarnessPlan> };
+export type ProjectPlan = { project: Project; harnesses: Partial<Record<HarnessId, HarnessPlan>> };
 
 type SkillEntry = { name: string; origin: string; root: string; sourceKind: "canonical" | "external" | "override" | "extra" };
 type CommandEntry = { name: string; origin: string; root: string; sourceKind: "standalone" | "external" | "extra" };
@@ -92,6 +92,12 @@ export class ContractError extends Error {
   constructor(message: string, readonly recovery: string) { super(message); }
 }
 function fail(message: string, recovery: string): never { throw new ContractError(message, `Recovery: ${recovery}`); }
+export function harnessIds(plan: ProjectPlan) { return HARNESS_IDS.filter((id) => plan.harnesses[id] !== undefined); }
+export function harnessPlan(plan: ProjectPlan, id: HarnessId) {
+  const harness = plan.harnesses[id];
+  if (!harness) fail(`harness ${id} is not selected`, "Declare it in skill.mod, select it through a setup, or pass --harness.");
+  return harness;
+}
 export function sha256(text: string | Buffer) { return createHash("sha256").update(text).digest("hex"); }
 function sortedDirectoryNames(path: string) {
   return readdirSync(path, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
@@ -346,7 +352,7 @@ function resolveEntries(project: Project, options: ResolveOptions) {
   return { skills: selectedSkills, commands, setupOmissions };
 }
 
-function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, installPaths: HarnessInstallPaths, entries: ReturnType<typeof resolveEntries>, validateAgentSkillNames: boolean): HarnessPlan {
+function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, installPaths: HarnessInstallPaths, entries: ReturnType<typeof resolveEntries>): HarnessPlan {
   const config = project.mod.harnesses[id];
   const tokens = config?.tokens ?? {};
   const omissions = config?.omissions ?? [];
@@ -399,7 +405,7 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
     const coCommandRaw = co && !commandOmitted ? readFileSync(join(entry.root, entry.name, "COMMAND.md"), "utf8") : null;
     const standaloneCommandRaw = (inject || commandsAsSkills) && standalone && !commandOmitted ? readFileSync(join(standalone.root, standalone.name), "utf8") : null;
     const commandRaw = coCommandRaw ?? standaloneCommandRaw;
-    if (commandsAsSkills && validateAgentSkillNames && (entry.name.length > 64 || !agentSkillName.test(entry.name))) fail(`invalid Agent Skill name ${JSON.stringify(entry.name)} rendered for ${id}`, "Rename the skill using at most 64 lowercase letters, numbers, and single hyphens.");
+    if (commandsAsSkills && (entry.name.length > 64 || !agentSkillName.test(entry.name))) fail(`invalid Agent Skill name ${JSON.stringify(entry.name)} rendered for ${id}`, "Rename the skill using at most 64 lowercase letters, numbers, and single hyphens.");
     const injected = (inject || commandsAsSkills) && commandRaw !== null;
     const body = injected ? injectCommand(id, facts, tokens, rendered, commandRaw!) : rendered;
     const delivery = { kind: "file" as const, path: `${installPaths.skills}/${entry.name}/SKILL.md` };
@@ -485,34 +491,44 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
 }
 
 export function resolvePlan(project: Project, options: ResolveOptions = {}): ProjectPlan {
+  const setup = options.setup ? setupFor(project, options.setup) : null;
+  const selected = [...new Set(setup
+    ? setup.harnesses.map((harness) => harness.id)
+    : options.harnesses?.length
+      ? options.harnesses
+      : HARNESS_IDS.filter((id) => project.mod.harnesses[id] !== undefined))];
+  if (!selected.length) fail("project selects no harnesses", "Declare a harness in skill.mod, select one through a setup, or pass --harness.");
   const facts = loadHarnesses();
   const entries = resolveEntries(project, { ...options, overrides: cachedDependencyPaths(project, options.overrides) });
-  const setup = options.setup ? setupFor(project, options.setup) : null;
   const scope = setup?.root ?? "home";
-  const selectedHarnesses = new Set(setup ? setup.harnesses.map((harness) => harness.id) : options.harnesses?.length ? options.harnesses : HARNESS_IDS);
-  return { project, harnesses: mapHarnesses((id) => buildHarness(project, id, facts[id], facts[id].installPaths[scope], entries, selectedHarnesses.has(id))) };
+  const harnesses: ProjectPlan["harnesses"] = {};
+  for (const id of selected) harnesses[id] = buildHarness(project, id, facts[id], facts[id].installPaths[scope], entries);
+  return { project, harnesses };
 }
-export function contractFor(plan: ProjectPlan) {
+export function schemaFor(project: Project) {
   const facts = loadHarnesses();
   return {
+    markup: ["{{token}}", "{{#harness}}", "{{^harness}}", "{{/}}", "$@"],
+    harnesses: mapHarnesses((id) => {
+      const value = facts[id];
+      return { argSyntax: value.argSyntax, tokens: project.mod.harnesses[id]?.tokens ?? {}, skillFrontmatter: value.skillFrontmatter, commandFrontmatter: value.commandFrontmatter, commandMerge: value.commandMerge };
+    }),
+  };
+}
+export function contractFor(plan: ProjectPlan) {
+  return {
     schemaVersion: 1,
-    schema: {
-      markup: ["{{token}}", "{{#harness}}", "{{^harness}}", "{{/}}", "$@"],
-      harnesses: mapHarnesses((id) => {
-        const value = facts[id];
-        return { argSyntax: value.argSyntax, tokens: plan.project.mod.harnesses[id]?.tokens ?? {}, skillFrontmatter: value.skillFrontmatter, commandFrontmatter: value.commandFrontmatter, commandMerge: value.commandMerge };
-      }),
-    },
+    schema: schemaFor(plan.project),
     manifest: {
       setups: Object.fromEntries(Object.values(plan.project.mod.setups).sort((a, b) => a.name.localeCompare(b.name)).map((setup) => [setup.name, {
         root: setup.root,
         selection: { mode: setup.mode ?? "all", skills: setup.selectors.map(({ name, reason }) => ({ name, ...(reason ? { reason } : {}) })) },
         harnesses: setup.harnesses.map((harness) => ({ name: harness.id, paths: harness.paths })),
       }])),
-      harnesses: mapHarnesses((id) => {
-        const harness = plan.harnesses[id];
-        return { profile: harness.profile, skills: harness.skills.map(publicSkill), omittedSkills: harness.omittedSkills, commands: harness.commands, rules: { source: harness.rules.source, delivery: harness.rules.delivery, sha256: harness.rules.sha256 }, assets: [] };
-      }),
+      harnesses: Object.fromEntries(harnessIds(plan).map((id) => {
+        const harness = harnessPlan(plan, id);
+        return [id, { profile: harness.profile, skills: harness.skills.map(publicSkill), omittedSkills: harness.omittedSkills, commands: harness.commands, rules: { source: harness.rules.source, delivery: harness.rules.delivery, sha256: harness.rules.sha256 }, assets: [] }];
+      })),
     },
   };
 }

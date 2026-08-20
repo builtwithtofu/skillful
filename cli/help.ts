@@ -88,7 +88,9 @@ Examples:
 `;
 
 export const RENDER_AFTER_HELP = `
-Writes a managed build tree only. Live harness destinations are install.
+Default rendering reconciles only harnesses declared in skill.mod. A named setup
+reconciles its exact set; --harness updates only the named outputs and preserves
+other managed renders. Live harness destinations are install.
 
 Examples:
   skillful render --dry-run

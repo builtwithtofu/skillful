@@ -118,6 +118,7 @@
             export XDG_CACHE_HOME="$TMPDIR/cache"
             mkdir -p "$HOME" "$XDG_CACHE_HOME" "$out"
             test -f ${sourceMaintenanceFixture.rendered}/pi/skills/agent-jj/SKILL.md
+            test ! -e ${sourceMaintenanceFixture.rendered}/codex
             test -f ${sourceMaintenanceFixture.rendered}/pi/skills/local/SKILL.md
             test -f ${(sourceMaintenanceFixture.forHarness "pi").skills}/agent-jj/SKILL.md
             test -f ${(sourceMaintenanceFixture.forHarness "pi").rules}
