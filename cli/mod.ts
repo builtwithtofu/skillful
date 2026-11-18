@@ -49,7 +49,8 @@ type SkillModBase = {
   leadingComments: Comments;
 };
 type Skip = WithComments<{ skills: string[]; agents: HarnessId[]; reason: string; line: number }>;
-export type FieldOverride = WithComments<{ skill: string; field: string; operation: "set" | "append"; value: { kind: "string" | "file"; text: string }; agent?: HarnessId; line: number }>;
+type OverrideValue = { kind: "string" | "file"; text: string };
+export type FieldOverride = WithComments<{ skill: string; field: string; value: OverrideValue; agent?: HarnessId; line: number } & ({ operation: "set" | "append" } | { operation: "replace"; match: OverrideValue })>;
 type SkillMod2 = SkillModBase & {
   version: 2;
   agents: WithComments<{ ids: HarnessId[] }>;
@@ -389,12 +390,21 @@ function parseMod2(base: SkillModBase, lines: string[], start: number, filename:
         break;
       }
       default: {
-        const field = value.match(/^(.+?)\.([a-zA-Z0-9][a-zA-Z0-9_-]*)(\.append)?$/);
-        if (!field || field[2] === "body") fail(filename, line, column, `unknown directive ${JSON.stringify(value)}`, "Use local, rules, use, agents, skip, machine, or a front-matter override.");
+        const field = value.match(/^(.+?)\.([a-zA-Z0-9][a-zA-Z0-9_-]*)(\.(append|replace))?$/);
+        if (!field || (field[4] === "replace" && field[2] !== "body")) fail(filename, line, column, `unknown directive ${JSON.stringify(value)}`, "Use local, rules, use, agents, skip, machine, or a skill override.");
         const scoped = bare(args[0], "on");
-        const rhs = args[scoped ? 3 : 1];
-        if (args.length !== (scoped ? 4 : 2) || !bare(args[scoped ? 2 : 0], "=") || !rhs || (!rhs.quoted && !words([rhs]))) syntax('<skill>.<field>[.append] [on <agent>] = "value" or ./path');
-        mod.fieldOverrides.push({ skill: field[1]!, field: field[2]!, operation: field[3] ? "append" : "set", value: { kind: rhs!.quoted ? "string" : "file", text: rhs!.value }, ...(scoped ? { agent: agents([args[1]!])[0]! } : {}), comments, line });
+        if (scoped && !args[1]) fail(filename, line, args[0]!.column, "expected an agent after on", `Use one of: ${HARNESS_IDS.join(", ")}.`);
+        const operands = args.slice(scoped ? 2 : 0);
+        const readValue = (token: Token): OverrideValue => ({ kind: token.quoted ? "string" : "file", text: token.value });
+        const isValue = (token: Token | undefined) => token && (token.quoted || words([token]));
+        const target = { skill: field[1]!, field: field[2]!, ...(scoped ? { agent: agents([args[1]!])[0]! } : {}), comments, line };
+        if (field[4] === "replace") {
+          if (operands.length !== 3 || !isValue(operands[0]) || !bare(operands[1], "with") || !isValue(operands[2])) syntax('<skill>.body.replace [on <agent>] "old" with "new"');
+          mod.fieldOverrides.push({ ...target, operation: "replace", match: readValue(operands[0]!), value: readValue(operands[2]!) });
+        } else {
+          if (operands.length !== 2 || !bare(operands[0], "=") || !isValue(operands[1])) syntax('<skill>.<field>[.append] [on <agent>] = "value" or ./path');
+          mod.fieldOverrides.push({ ...target, operation: field[4] === "append" ? "append" : "set", value: readValue(operands[1]!) });
+        }
         break;
       }
     }
@@ -417,7 +427,12 @@ function formatMod2(mod: SkillMod2): string {
     [...mod.rootComments.rules, `rules ${quote(mod.roots.rules)}`],
   ]);
   section(mod.requires.map(({ ref, selectors, comments }) => [...comments, `use ${quote(ref)} { ${selectors.map(quote).join(" ")} }`]));
-  section(mod.fieldOverrides.map(({ skill, field, operation, agent, value, comments }) => [...comments, `${skill}.${field}${operation === "append" ? ".append" : ""}${agent ? ` on ${agent}` : ""} = ${value.kind === "string" ? JSON.stringify(value.text) : value.text}`]));
+  const overrideValue = (value: OverrideValue) => value.kind === "string" ? JSON.stringify(value.text) : value.text;
+  section(mod.fieldOverrides.map((item) => {
+    const { skill, field, operation, agent, value, comments } = item;
+    const target = `${skill}.${field}${operation === "set" ? "" : `.${operation}`}${agent ? ` on ${agent}` : ""}`;
+    return [...comments, `${target} ${item.operation === "replace" ? `${overrideValue(item.match)} with` : "="} ${overrideValue(value)}`];
+  }));
   if (mod.agents.ids.length) section([[...mod.agents.comments, `agents ${mod.agents.ids.join(" ")}`]]);
   section(mod.skips.map(({ skills, agents, reason, comments }) => [...comments, `skip ${skills.map((skill) => skill === "on" ? JSON.stringify(skill) : quote(skill)).join(" ")} on ${agents.join(" ")} ${JSON.stringify(reason)}`]));
   section(Object.values(mod.setups).map(({ name, selectors, comments }) =>
@@ -507,13 +522,16 @@ export function formatMod(mod: SkillMod): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function migrateMod(mod: SkillMod, filename: string, resolveSkills: () => { name: string; origin: string; sourceKind: string }[]) {
-  if (mod.version === 2) return undefined;
+export function migrateMod(mod: Extract<SkillMod, { version: 1 }>, filename: string, resolveSkills: () => { name: string; origin: string; sourceKind: string }[]) {
   const unsupported = (feature: string): never => fail(filename, 1, 1, `cannot migrate ${feature} without changing the render`, "Keep using skillful 1, or replace this setting with a skillful 2 equivalent before migrating.");
   const ids = HARNESS_IDS.filter((id) => mod.harnesses[id] !== undefined);
   for (const harness of Object.values(mod.harnesses)) if (Object.keys(harness.tokens).length) unsupported(`tokens for ${harness.id}`);
   const skills = resolveSkills();
   const known = new Set(skills.map(({ name }) => name));
+  const requireKnownOmission = (name: string, context: string) => {
+    if (!known.has(name)) fail(filename, 1, 1, `cannot migrate omit-skill ${name} for ${context}: no declared source supplies it`,
+      "Declare the skill's source before migrating, or remove the omission if the skill is retired.");
+  };
   const requires = new Map<string, Require>();
   for (const requirement of mod.requires) {
     const selectors = skills.filter(({ origin, sourceKind }) => sourceKind !== "canonical" && origin === requirement.name).map(({ name }) => name);
@@ -528,7 +546,7 @@ export function migrateMod(mod: SkillMod, filename: string, resolveSkills: () =>
     agentComments.push(...harness.comments);
     for (const { kind, selector, reason, comments } of harness.omissions) {
       if (kind === "omit-command") unsupported(`omit-command ${selector} for ${harness.id}`);
-      if (!known.has(selector)) continue;
+      requireKnownOmission(selector, harness.id);
       const skip = skips.find((entry) => entry.skills[0] === selector && entry.reason === reason);
       if (skip) { skip.agents.push(harness.id); skip.comments.push(...comments); }
       else skips.push({ skills: [selector], agents: [harness.id], reason, comments: [...comments], line: 1 });
@@ -541,6 +559,7 @@ export function migrateMod(mod: SkillMod, filename: string, resolveSkills: () =>
     if (setup.harnesses.length !== ids.length || setup.harnesses.some(({ id }) => !ids.includes(id))) unsupported(`the distinct agent list for setup ${setup.name}`);
     const comments = [...setup.comments];
     for (const { name, reason, comments: selectorComments } of setup.selectors) {
+      requireKnownOmission(name, `setup ${setup.name}`);
       comments.push(...selectorComments, `// ${JSON.stringify(name)}: ${JSON.stringify(reason)}`);
     }
     for (const { id, paths } of setup.harnesses) {
@@ -550,7 +569,7 @@ export function migrateMod(mod: SkillMod, filename: string, resolveSkills: () =>
         comments.push(`// Previous install path override: ${setting}`);
       }
     }
-    return [setup.name, { ...setup, comments, selectors: setup.selectors.filter(({ name }) => known.has(name)) }];
+    return [setup.name, { ...setup, comments }];
   }));
   const next: SkillMod2 = { ...mod, version: 2, requires: [...requires.values()], agents: { ids, comments: agentComments }, skips, setups, fieldOverrides: [], trailingComments: [] };
   const emitted = formatMod2(next).split("\n");

@@ -121,6 +121,59 @@ describe("dependency transactions and cache", () => {
     expect(readFileSync(mod, "utf8")).toContain(`use ${ref} { skill-b }`);
     expect(readLock(project)[0]?.ref).toBe(ref);
   });
+  test("add refuses a conflicting second ref for an existing source", async () => {
+    const { project, ref, cache } = fixture();
+    const modPath = join(project, "skill.mod");
+    writeFileSync(modPath, "skillful 2\nagents pi\n");
+    await addDependency(discoverProject({ project }), ref, { only: ["skill-a"], cache });
+    const before = readFileSync(modPath, "utf8");
+    const pins = readLock(project);
+    await expect(addDependency(discoverProject({ project }), ref.replace(/@main$/, "@HEAD"), { only: ["skill-a"], cache })).rejects.toThrow("conflicts");
+    expect(readFileSync(modPath, "utf8")).toBe(before);
+    expect(readLock(project)).toEqual(pins);
+  });
+
+  test("targeted update replaces an old pin when a use changes ref", async () => {
+    const { project, ref, cache, dependency } = fixture();
+    const modPath = join(project, "skill.mod");
+    const manifest = (source: string) => `skillful 2\nuse ${source} { skill-a }\nagents pi\n`;
+    writeFileSync(modPath, manifest(ref));
+    await updateDependencies(discoverProject({ project }), [], cache);
+    git(dependency, "branch", "next");
+    const next = ref.replace(/@main$/, "@next");
+    writeFileSync(modPath, manifest(next));
+    await updateDependencies(discoverProject({ project }), [next], cache);
+    expect(readLock(project).map(({ ref }) => ref)).toEqual([next]);
+    expect(cachedDependencyPaths(discoverProject({ project }), {}, cache)[next]).toBeDefined();
+  });
+
+  test.each(["existing pin", "targeted update", "changed ref", "add"] as const)("check sees drift against the prior source after %s", async (mode) => {
+    const { project, ref, cache, dependency } = fixture();
+    const modPath = join(project, "skill.mod");
+    const manifest = (source: string, override = true) => `skillful 2\nuse ${source} { skill-a }\nagents pi\n${override ? 'skill-a.body = "Project guidance"\nskill-a.description = "Project description"\n' : ""}`;
+    writeFileSync(join(project, "skills", "example", "SKILL.md"), "Example instructions.\n");
+    writeFileSync(modPath, manifest(ref, mode !== "existing pin"));
+    if (mode === "add") await addDependency(discoverProject({ project }), ref, { cache });
+    else await updateDependencies(discoverProject({ project }), mode === "targeted update" ? [ref] : [], cache);
+    if (mode === "existing pin") writeFileSync(modPath, manifest(ref));
+    const check = () => Bun.spawnSync(["bun", join(import.meta.dir, "main.ts"), "check", "--strict"], {
+      cwd: project, env: { ...process.env, XDG_CACHE_HOME: cache }, stdout: "pipe", stderr: "pipe",
+    });
+    expect(check().exitCode).toBe(0);
+    writeFileSync(join(dependency, "skill-a", "SKILL.md"), "---\nname: skill-a\ndescription: New upstream description\n---\nNew upstream guidance.\n");
+    git(dependency, "add", ".");
+    git(dependency, "commit", "-m", "change upstream description and body");
+    if (mode === "changed ref") {
+      git(dependency, "branch", "next");
+      writeFileSync(modPath, manifest(ref.replace(/@main$/, "@next")));
+    }
+    if (mode === "add") await addDependency(discoverProject({ project }), ref, { cache });
+    else await updateDependencies(discoverProject({ project }), mode === "targeted update" ? [ref] : [], cache);
+    const result = check();
+    expect(result.stdout.toString() + result.stderr.toString()).toContain("upstream changed skill-a.body");
+    expect(result.stdout.toString() + result.stderr.toString()).toContain("upstream changed skill-a.description");
+    expect(result.exitCode).toBe(1);
+  });
   test.each([false, true])("skillful 2 updates and fetches use refs (existing pin: %s)", async (existingPin) => {
     const { root, project, dependency, ref, cache } = fixture();
     if (existingPin) await addDependency(discoverProject({ project }), ref, { name: "legacy-alias", cache });

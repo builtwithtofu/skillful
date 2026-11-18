@@ -47,7 +47,7 @@ Afterward:
 export const FMT_AFTER_HELP = `
 Use --check in CI or before a review. Omit it to rewrite skill.mod in place.
 Both skillful 1 and skillful 2 keep their existing version.
-See skillful skills show mod for skillful 2 front-matter overrides.
+See skillful skills show mod for skillful 2 front-matter and body overrides.
 
 Examples:
   skillful fmt --check
@@ -61,6 +61,8 @@ export const MIGRATE_AFTER_HELP = `
 Use when moving an existing project to skillful 2; skillful 1 still works.
 Migration stops if a setting cannot be translated without changing the render.
 Migration lists skills from each source. If a pin is missing from the cache, run skillful fetch first.
+Duplicate aliases at the same pin collapse to one; pins for unselected sources are removed.
+If an omitted skill can't be found, declare its source or remove the omission if retired.
 Install path overrides are kept as comments, not applied by skillful 2.
 
 Example:
@@ -77,7 +79,8 @@ For an existing require, pass its name; skill.mod supplies the ref, alias, and
 New GitHub refs default to @HEAD, the repository's default branch. Without --name, the repository or subdirectory
 name is used. Omit selectors to include the whole tree.
 For skillful 2, pass the use ref; a new use needs --only for each skill and
-accepts neither --name nor --exclude.
+accepts neither --name nor --exclude. A conflicting ref for an existing source
+is refused. Add records new = override baselines from the old pin if it exists.
 
 Examples:
   skillful add agent-browser
@@ -103,9 +106,11 @@ Examples:
 export const UPDATE_AFTER_HELP = `
 Uses declarations in skill.mod and never edits them. A named update creates or
 replaces that dependency's pin without requiring unrelated pins. With no names,
-update resolves every remote dependency before replacing the lock atomically.
-For skillful 2, pass a use ref for one dependency, or run bare update after
-editing the ref in skill.mod to replace its old pin.
+update resolves every remote dependency and checks skillful 2 use selections before
+replacing the lock atomically.
+For skillful 2, pass a use ref for one dependency. A changed ref replaces the old
+pin when it is the only ref change for that source. Update records new override
+baselines from the old pin when one exists.
 
 Examples:
   skillful update
@@ -167,8 +172,10 @@ Examples:
 
 export const CHECK_AFTER_HELP = `
 Read-only. --strict promotes warnings to failure.
-Warns when an upstream front-matter field replaced in skill.mod differs from
-its baseline in skill.lock. Run skillful update to record new baselines.
+Warns when an upstream front-matter field or body replaced with = in skill.mod differs from
+its baseline in skill.lock. Update alone keeps existing baselines. After reviewing and
+accepting the upstream change, remove the override from skill.mod, run skillful update with no arguments,
+then restore the override and run skillful update again. Verify with skillful check --strict.
 
 Examples:
   skillful check

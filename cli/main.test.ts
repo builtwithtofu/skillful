@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { cacheKey } from "./nar.ts";
+import { cacheKey, narHash } from "./nar.ts";
 
 const dirs: string[] = [];
 const temp = () => { const dir = join(tmpdir(), `skillful-main-${crypto.randomUUID()}`); mkdirSync(dir); dirs.push(dir); return dir; };
@@ -40,25 +40,79 @@ angular-developer.when_to_use = "On Angular projects"
     expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toContain("description: Upstream");
   });
 
+  test("renders the ketchup passage override and rejects missing or repeated text at the locked revision", () => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    writeFileSync(join(root, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example\n---");
+    const source = temp();
+    mkdirSync(join(source, "ketchup"));
+    const passage = "Draw a Mermaid diagram of the flow.";
+    writeFileSync(join(source, "ketchup", "SKILL.md"), `---\nname: ketchup\ndescription: Ketchup\n---\n\n${passage}\n`);
+    const hash = narHash(source);
+    const cached = join(root, ".cache", "skillful", cacheKey(hash));
+    mkdirSync(join(root, ".cache", "skillful"), { recursive: true });
+    renameSync(source, cached);
+    const rev = "a".repeat(40);
+    writeFileSync(join(root, "skill.lock"), `old-ketchup-name github:example/skills@main ${rev} ${hash}\n`);
+    const mod = join(root, "skill.mod");
+    const header = "skillful 2\nuse github:example/skills@main { ketchup }\nagents pi claude codex\n";
+    const replacement = 'ketchup.body.replace "Draw a Mermaid diagram of the flow." with "Describe the flow as a numbered list."\n';
+    writeFileSync(join(root, "pi.txt"), "Use a short list.");
+    writeFileSync(join(root, "claude.md"), "\nWrite a paragraph.\n");
+    writeFileSync(mod, header + 'ketchup.body.replace on pi "Describe the flow as a numbered list." with ./pi.txt\n' + replacement + 'ketchup.body on claude = ./claude.md\nketchup.body.append on claude = "Keep it short.\\n"\nexample.body = "New instructions."\n');
+    expect(run(root, "fmt").exitCode).toBe(0);
+    expect(run(root, "fmt", "--check").exitCode).toBe(0);
+    const render = () => Bun.spawnSync(["bun", join(import.meta.dir, "main.ts"), "render", "--force"], { cwd: root, env: { ...process.env, XDG_CACHE_HOME: join(root, ".cache") } });
+    const result = render();
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    const rendered = (agent: string) => readFileSync(join(root, "rendered", agent, "skills", "ketchup", "SKILL.md"), "utf8");
+    expect(rendered("pi")).toEndWith("description: Ketchup\n---\n\nUse a short list.\n");
+    expect(rendered("claude")).toEndWith("description: Ketchup\n---\n\nWrite a paragraph.\nKeep it short.\n");
+    expect(rendered("codex")).toEndWith("\n\nDescribe the flow as a numbered list.\n");
+    expect(readFileSync(join(root, "rendered", "pi", "skills", "example", "SKILL.md"), "utf8")).toEndWith("\n---\nNew instructions.");
+    for (const before of ['ketchup.body = "No diagram."\n', `ketchup.body.append = ${JSON.stringify(passage)}\n`]) {
+      writeFileSync(mod, header + before + replacement);
+      const failure = render();
+      expect(failure.exitCode).not.toBe(0);
+      expect(output(failure).stderr).toContain(`ketchup.body.replace expected ${JSON.stringify(passage)} exactly once (locked revision ${rev})`);
+    }
+  });
+
+  test.each([
+    ["adds a description without front matter", "Plain instructions.\n", 'example.description = "New guidance"', "---\ndescription: New guidance\n---\nPlain instructions.\n"],
+    ["replaces only the body with CRLF front matter", "---\r\nname: example\r\ndescription: Example\r\n---\r\nOriginal body.\r\n", 'example.body = "New body"', "---\nname: example\ndescription: Example\n---\nNew body"],
+  ])("a skillful 2 override %s", (_name, upstream, override, expected) => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    writeFileSync(join(root, "skills", "example", "SKILL.md"), upstream);
+    writeFileSync(join(root, "skill.mod"), `skillful 2\nagents pi\n${override}\n`);
+    const result = run(root, "manifest", "--format", "json");
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    expect(JSON.parse(output(result).stdout).harnesses.pi.skills.find(({ name }: { name: string }) => name === "example").body.replaceAll("\r\n", "\n")).toBe(expected);
+  });
   test("check reports drift only for replaced upstream fields, including after updating", () => {
     const root = temp();
     expect(run(root, "init").exitCode).toBe(0);
     const skill = join(root, "skills", "example", "SKILL.md");
-    const upstream = (description: string, license: string) => writeFileSync(skill, `---\nname: example\ndescription: ${description}\nlicense: ${license}\n---\n\nBody.\n`);
+    const upstream = (description: string, license: string, body = "Body.") => writeFileSync(skill, `---\nname: example\ndescription: ${description}\nlicense: ${license}\n---\n\n${body}\n`);
     upstream("Original", "MIT");
     writeFileSync(join(root, "skill.mod"), `skillful 2
 agents pi claude
 example.description on pi = "Local wording"
 example.license.append = " (see LICENSE)"
+example.body on claude = "Local instructions."
+example.body.append = " More."
+example.body.replace "More." with "Extra."
 `);
     expect(run(root, "update").exitCode).toBe(0);
     upstream("Original", "Apache-2.0");
     expect(output(run(root, "check")).stdout).toBe("OK\n");
-    upstream("Changed", "Apache-2.0");
+    upstream("Changed", "Apache-2.0", "Changed body.");
     expect(run(root, "update").exitCode).toBe(0);
     const result = run(root, "check", "--strict", "--format", "json");
     expect(result.exitCode, output(result).stderr).toBe(1);
     expect(JSON.parse(output(result).stdout).warnings).toEqual([
+      expect.objectContaining({ harness: "claude", skill: "example", message: expect.stringContaining("example.body") }),
       expect.objectContaining({ harness: "pi", skill: "example", message: expect.stringContaining("example.description") }),
     ]);
   });
@@ -329,15 +383,37 @@ setup laptop (
     expect(skills()).toEqual(before);
   });
 
-  test("migrate leaves a renderable project when a harness omits a retired skill", () => {
+  test("migrate can be retried after removing a confirmed retired omission", () => {
     const root = temp();
     expect(run(root, "init").exitCode).toBe(0);
     writeFileSync(join(root, "skills", "example", "SKILL.md"), "Example body.\n");
     writeFileSync(join(root, "skill.mod"), 'skillful 1\nharness pi (\n  omit-skill retired "Removed upstream"\n)\n');
     expect(run(root, "render", "--dry-run").exitCode).toBe(0);
+    expect(run(root, "migrate").exitCode).toBe(1);
+    writeFileSync(join(root, "skill.mod"), "skillful 1\nharness pi (\n)\n");
     expect(run(root, "migrate").exitCode).toBe(0);
     const result = run(root, "render", "--dry-run");
     expect(result.exitCode, output(result).stderr).toBe(0);
+  });
+
+  test("migrate refuses to drop an omission when its extra root is not supplied", () => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    writeFileSync(join(root, "skills/example/SKILL.md"), "Local body.\n");
+    mkdirSync(join(root, "ext/vendor"), { recursive: true });
+    writeFileSync(join(root, "ext/vendor/SKILL.md"), "Vendor body.\n");
+    const mod = join(root, "skill.mod");
+    const original = 'skillful 1\nharness pi (\n  omit-skill vendor "Not for Pi"\n)\nharness claude (\n)\n';
+    writeFileSync(mod, original);
+    const render = run(root, "render", "--extra-skill-root", "ext=./ext");
+    expect(render.exitCode, output(render).stderr).toBe(0);
+    expect(existsSync(join(root, "rendered/pi/skills/vendor/SKILL.md"))).toBe(false);
+    expect(existsSync(join(root, "rendered/claude/skills/vendor/SKILL.md"))).toBe(true);
+
+    const migrated = run(root, "migrate");
+    expect(migrated.exitCode, output(migrated).stderr).toBe(1);
+    expect(output(migrated).stderr).toContain("omit-skill vendor for pi");
+    expect(readFileSync(mod, "utf8")).toBe(original);
   });
   test("migrate leaves a manifest alone when it cannot translate a render setting", () => {
     const project = temp();
@@ -464,6 +540,8 @@ machine personal skip foreign example
     ['skip missing on pi "reason"', "unknown skill missing in skip"],
     ["machine laptop skip missing", "unknown skill missing in machine laptop"],
     ['missing.description = "value"', "unknown skill missing in front-matter override"],
+    ['missing.body.append = "value"', "unknown skill missing in body override"],
+    ['example.body on', 'expected an agent after on'],
   ])("skillful 2 reports the line for %s", (directive, message) => {
     const root = temp();
     expect(run(root, "init").exitCode).toBe(0);

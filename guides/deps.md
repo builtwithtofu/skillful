@@ -3,6 +3,7 @@
 Pull other skill trees with Git. `add` declares, resolves, locks, and fetches one
 tree. `update name` creates or moves that declaration's pin without requiring
 unrelated pins; bare `update` reconciles every remote declaration atomically.
+In skillful 2, bare `update` checks `use` selections before writing the lock.
 `fetch` retrieves selected or all exact pins and never rewrites `skill.lock`.
 
 Not `inspect` (that reads what you already have). Not `mod` (that declares the require).
@@ -21,10 +22,12 @@ existing declaration.
 
 In skillful 2, a `use` declaration is identified by its exact ref, such as
 `skillful update github:angular/skills@main`. `fetch` and `update` can reuse pins
-from a skillful 1 lock with matching refs. Run bare `update` after changing a
-ref to remove the old pin. To add a new `use`, pass `--only` for each skill.
-Bare `skillful update` also records baselines for new front-matter replacements.
-It keeps existing baselines so `skillful check` can report drift after a pin moves.
+from a skillful 1 lock with matching refs. A named update replaces the old pin
+when it can match a changed ref unambiguously to the same source. To add a new
+`use`, pass `--only` for each skill; `add` refuses a conflicting ref for an
+existing source.
+`skillful update` and `skillful add` record baselines for new `=` overrides from
+the prior pin if there is one, so `skillful check` can report upstream drift.
 
 `path:` dependencies are live source and stay out of `skill.lock`. Paths resolve
 from `skill.mod`; a nested project may use a sibling within the same Git source

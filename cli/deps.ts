@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, 
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { cacheKey, narHash } from "./nar.ts";
 import { readLock, readOverrideBaselines, pinFor, validateLock, writeLockAtomic, type LockEntry } from "./lock.ts";
-import { formatMod, type Require, type SkillMod } from "./mod.ts";
-import { isInside, type Project } from "./project.ts";
+import { formatMod, migrateMod, type Require, type SkillMod } from "./mod.ts";
+import { isInside, resolveProjectPath, type Project } from "./project.ts";
 
 export type ParsedRef =
   | { type: "github"; ref: string; identity: string; owner: string; repo: string; subdir: string | undefined; version: string }
@@ -186,20 +186,85 @@ function inferredDependencyName(parsed: ParsedRef) {
   if (!candidate || !/^[a-z0-9][a-z0-9._-]*$/.test(candidate)) fail(`cannot infer a dependency name from ${parsed.ref}`, "Pass --name using lowercase letters, digits, dots, underscores, or hyphens.");
   return candidate;
 }
-function transactionalWrite(project: Project, mod: SkillMod, entries: LockEntry[]) {
+function transactionalWrite(project: Project, text: string, entries: LockEntry[], baselines?: Map<string, string>) {
   const modBefore = readFileSync(project.modPath, "utf8");
-  const lockPath = join(project.root, "skill.lock");
-  const lockBefore = existsSync(lockPath) ? readFileSync(lockPath, "utf8") : null;
-  try { writeFileSync(project.modPath, formatMod(mod)); writeLockAtomic(project.root, entries); }
+  try { writeFileSync(project.modPath, text); writeLockAtomic(project.root, entries, baselines); }
   catch (cause) {
     writeFileSync(project.modPath, modBefore);
-    if (lockBefore === null) rmSync(lockPath, { force: true }); else writeFileSync(lockPath, lockBefore);
     throw cause;
   }
 }
+
+export async function migrateProject(project: Project) {
+  if (project.mod.version === 2) return undefined;
+  const { resolveSkills } = await import("./contract.ts");
+  const entries = readLock(project.root, false);
+  const migrated = migrateMod(project.mod, project.modPath, () => resolveSkills(project, cachedDependencyPaths(project, {}, undefined, entries)));
+  const refs = new Set(migrated.mod.requires.map(({ ref }) => ref));
+  const pins = new Map<string, LockEntry>();
+  for (const entry of entries) {
+    if (!refs.has(entry.ref)) continue;
+    const first = pins.get(entry.ref);
+    if (!first) pins.set(entry.ref, entry);
+    else if (first.rev !== entry.rev || first.narHash !== entry.narHash) fail(
+      `cannot migrate ${entry.ref}: ${first.name} and ${entry.name} have different pins`,
+      "Reconcile the alias pins before migrating, or keep using skillful 1.",
+    );
+  }
+  const next = validateLock(migrated.mod, [...pins.values()]);
+  if (next.length !== entries.length) transactionalWrite(project, migrated.text, next);
+  else writeFileSync(project.modPath, migrated.text);
+  return migrated;
+}
+function previousPin(mod: SkillMod, requirement: Require, entries: LockEntry[]) {
+  const exact = pinFor(mod, requirement, entries);
+  if (exact || mod.version === 1) return exact;
+  const identity = parseRef(requirement.ref).identity;
+  const unpinned = mod.requires.filter((candidate) => parseRef(candidate.ref).identity === identity && !pinFor(mod, candidate, entries));
+  const orphaned = entries.filter((entry) => parseRef(entry.ref).identity === identity && !mod.requires.some(({ ref }) => ref === entry.ref));
+  return unpinned.length === 1 && orphaned.length === 1 ? orphaned[0] : undefined;
+}
+
+async function overrideBaselines(project: Project, before: LockEntry[], after: LockEntry[], selected: Require[], cache?: string, full = false) {
+  const previous = readOverrideBaselines(project.root);
+  if (project.mod.version !== 2) return previous;
+  const { mod } = project;
+  const baselines = full ? new Map<string, string>() : new Map(previous);
+  const items = mod.fieldOverrides.filter(({ operation }) => operation === "set");
+  if (!items.length) return baselines;
+  const { replacementKey, replacementHash } = await import("./contract.ts");
+  for (const requirement of [undefined, ...selected]) {
+    const origin = requirement?.name ?? "canonical";
+    const applicable = items.filter(({ skill }) => requirement ? requirement.selectors.includes(skill) : !mod.requires.some(({ selectors }) => selectors.includes(skill)));
+    if (!applicable.length) continue;
+    const old = requirement && previousPin(mod, requirement, before);
+    const next = requirement && pinFor(mod, requirement, after);
+    let oldRoot: string | undefined;
+    let nextRoot: string | undefined;
+    for (const item of applicable) {
+      const key = replacementKey(origin, item);
+      const oldKey = old && replacementKey(old.ref, item);
+      const hash = previous.get(key) ?? (oldKey && previous.get(oldKey));
+      if (hash !== undefined) {
+        if (oldKey && oldKey !== key) baselines.delete(oldKey);
+        baselines.set(key, hash);
+        continue;
+      }
+      if (requirement && old) oldRoot ??= effectiveRoot(project, requirement, await fetchEntry(old, cache));
+      let file = oldRoot && join(oldRoot, item.skill, "SKILL.md");
+      if (!file || !existsSync(file)) {
+        nextRoot ??= !requirement ? resolveProjectPath(project, mod.roots.skills, "directory")
+          : effectiveRoot(project, requirement, requirement.ref.startsWith("path:") ? project.root : await fetchEntry(next!, cache));
+        file = join(nextRoot, item.skill, "SKILL.md");
+      }
+      if (existsSync(file)) baselines.set(key, replacementHash(readFileSync(file, "utf8"), item));
+    }
+  }
+  return baselines;
+}
 function lockName(mod: SkillMod, requirement: Require, entries: LockEntry[]) {
   if (mod.version === 1) return requirement.name;
-  return pinFor(mod, requirement, entries)?.name ?? `use-${createHash("sha256").update(requirement.ref).digest("hex")}`;
+  return previousPin(mod, requirement, entries)?.name ?? `use-${createHash("sha256").update(requirement.ref).digest("hex")}`;
 }
 
 function namedRequirement(mod: SkillMod, name: string, entries: LockEntry[]) {
@@ -214,9 +279,7 @@ export async function addDependency(project: Project, input: string, options: { 
   const named = namedRequirement(mod, input, currentPins ?? []);
   const parsedInput = parseRef(named?.ref ?? input);
   const omittedGitHubVersion = input.startsWith("github:") && !input.includes("@");
-  const existing = named ?? (mod.version === 1 || omittedGitHubVersion
-    ? mod.requires.find((requirement) => parseRef(requirement.ref).identity === parsedInput.identity)
-    : undefined);
+  const existing = named ?? mod.requires.find((requirement) => parseRef(requirement.ref).identity === parsedInput.identity);
   const ref = existing && (named !== undefined || omittedGitHubVersion) ? existing.ref : parsedInput.ref;
   const parsed = ref === parsedInput.ref ? parsedInput : parseRef(ref);
   const suppliedMode = options.only !== undefined ? "only" : options.exclude !== undefined ? "exclude" : undefined;
@@ -232,10 +295,17 @@ export async function addDependency(project: Project, input: string, options: { 
   const requirement = existing ?? { ref, alias: mod.version === 2 ? undefined : options.name ?? name, name, mode: suppliedMode, selectors: [...suppliedSelectors], comments: [] };
   const nextMod = structuredClone(mod);
   if (!existing) nextMod.requires.push(requirement);
-  if (parsed.type === "path") { effectiveRoot(project, requirement, project.root); writeFileSync(project.modPath, formatMod(nextMod)); return { requirement, entry: null }; }
+  if (parsed.type === "path") {
+    effectiveRoot(project, requirement, project.root);
+    const baselines = currentPins && await overrideBaselines({ ...project, mod: nextMod }, currentPins, currentPins, [requirement], options.cache);
+    if (currentPins && baselines?.size) transactionalWrite(project, formatMod(nextMod), currentPins, baselines);
+    else writeFileSync(project.modPath, formatMod(nextMod));
+    return { requirement, entry: null };
+  }
   const oldEntries = currentPins ?? readLock(project.root, false);
   const entry = await resolveAndFetch(lockName(mod, requirement, oldEntries), ref, options.cache);
-  transactionalWrite(project, nextMod, [...oldEntries.filter((candidate) => candidate.name !== entry.name), entry]);
+  const next = [...oldEntries.filter((candidate) => candidate.name !== entry.name), entry];
+  transactionalWrite(project, formatMod(nextMod), next, await overrideBaselines({ ...project, mod: nextMod }, oldEntries, next, [requirement], options.cache));
   return { requirement, entry };
 }
 export async function fetchDependencies(project: Project, names: string[] = [], cache?: string) {
@@ -265,7 +335,7 @@ export async function updateDependencies(project: Project, names: string[], cach
   const existing = readLock(project.root, false);
   const remote = project.mod.requires.filter((requirement) => !requirement.ref.startsWith("path:"));
   const selected = selectedNames.length === 0 ? remote : selectedNames.map((name) => {
-    const requirement = namedRequirement(project.mod, name, existing);
+    const requirement = namedRequirement(project.mod, name, existing) ?? remote.find((candidate) => previousPin(project.mod, candidate, existing)?.name === name);
     if (!requirement) fail(`unknown dependency ${name}`, "Choose a dependency declared in skill.mod.");
     if (requirement.ref.startsWith("path:")) fail(`path dependency ${name} has no pin to update`, "Edit the local tree directly.");
     return requirement;
@@ -274,14 +344,11 @@ export async function updateDependencies(project: Project, names: string[], cach
   for (const requirement of new Set(selected)) refreshed.push(await resolveAndFetch(lockName(project.mod, requirement, existing), requirement.ref, cache));
   const selectedSet = new Set(refreshed.map((entry) => entry.name));
   const next = [...(selectedNames.length === 0 ? [] : existing.filter((entry) => !selectedSet.has(entry.name))), ...refreshed];
-  if (project.mod.version === 2 && selectedNames.length === 0) {
-    const baselines = new Map<string, string>();
-    if (project.mod.fieldOverrides.some((item) => item.operation === "set")) {
-      const { replacementFields } = await import("./contract.ts");
-      const paths = cachedDependencyPaths(project, {}, cache, next);
-      for (const { key, hash } of replacementFields(project, paths, readOverrideBaselines(project.root))) baselines.set(key, hash);
-    }
-    writeLockAtomic(project.root, next, baselines);
-  } else writeLockAtomic(project.root, next);
+  const full = selectedNames.length === 0;
+  if (full && project.mod.version === 2) {
+    const { resolveSkills } = await import("./contract.ts");
+    resolveSkills(project, cachedDependencyPaths(project, {}, cache, next));
+  }
+  writeLockAtomic(project.root, next, await overrideBaselines(project, existing, next, full ? project.mod.requires : [...new Set(selected)], cache, full));
   return next;
 }

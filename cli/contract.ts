@@ -6,7 +6,7 @@ import { isScalar, parseDocument } from "yaml";
 import { HARNESS_IDS, mapHarnesses, ModError, type FieldOverride, type HarnessId, type Omission, type Require, type Setup } from "./mod.ts";
 import { resolveProjectPath, type Project } from "./project.ts";
 import { cachedDependencyPaths } from "./deps.ts";
-import { readOverrideBaselines } from "./lock.ts";
+import { readLock, readOverrideBaselines } from "./lock.ts";
 
 export type ExtraRoot = { origin: string; path: string };
 export type ResolveOptions = {
@@ -137,9 +137,10 @@ function uniqueByName<T extends { name: string; origin: string }>(entries: T[], 
   if (duplicates.length) fail(`duplicate ${kind} names: ${duplicates.map(([name, values]) => `${name} (${values.map((value) => value.origin).join(", ")})`).join("; ")}`, `Use only/exclude or rename one conflicting ${kind}.`);
 }
 
-function frontmatterEnd(lines: string[]) {
-  if (lines[0] !== "---") return null;
-  for (let index = 1; index < lines.length; index++) if (lines[index] === "---") return index;
+function frontmatterEnd(lines: string[], crlf = false) {
+  const delimiter = (line: string | undefined) => line === "---" || (crlf && line === "---\r");
+  if (!delimiter(lines[0])) return null;
+  for (let index = 1; index < lines.length; index++) if (delimiter(lines[index])) return index;
   return null;
 }
 function topLevelKeyOf(line: string) { return line.match(/^([A-Za-z0-9][A-Za-z0-9_-]*):/)?.[1] ?? null; }
@@ -161,32 +162,48 @@ function frontmatterValue(key: string, text: string) {
 }
 function skillDocument(raw: string, id: HarnessId, source: string) {
   const lines = raw.split("\n");
-  const end = frontmatterEnd(lines);
+  const end = frontmatterEnd(lines, true);
   const yaml = end === null ? "" : lines.slice(1, end).join("\n");
   const projected = applyBlocks(id, yaml, source);
-  const document = parseDocument(projected.trim() ? projected : "{}");
+  const document = parseDocument(projected);
   if (document.errors.length) fail(`invalid YAML frontmatter: ${document.errors[0]!.message}`, "Fix the frontmatter and retry.");
   return { document, body: end === null ? raw : lines.slice(end + 1).join("\n") };
 }
 
-function applyFieldOverrides(project: Project, skill: string, id: HarnessId, raw: string) {
+function applyFieldOverrides(project: Project, entry: SkillEntry, id: HarnessId, raw: string) {
   if (project.mod.version !== 2) return raw;
-  const overrides = project.mod.fieldOverrides.filter((item) => item.skill === skill);
+  const overrides = project.mod.fieldOverrides.filter((item) => item.skill === entry.name);
   const applicable = [...overrides.filter((item) => !item.agent), ...overrides.filter((item) => item.agent === id)];
   if (!applicable.length) return raw;
-  const { document, body } = skillDocument(raw, id, skill);
+  const upstreamBody = bodyOf(raw, true);
+  let body = upstreamBody;
+  const document = applicable.some((item) => item.field !== "body") ? skillDocument(raw, id, entry.name).document : null;
+  const readValue = (value: FieldOverride["value"]) => value.kind === "string" ? value.text : readFileSync(resolveProjectPath(project, value.text, "file"), "utf8");
   for (const item of applicable) {
-    const value = item.value.kind === "string" ? item.value.text : readFileSync(resolveProjectPath(project, item.value.text, "file"), "utf8");
-    if (item.operation === "append") {
-      const old = document.get(item.field);
-      document.set(item.field, (old == null ? "" : String(old)) + value);
-    } else document.set(item.field, value);
+    if (item.operation === "replace") {
+      const match = readValue(item.match);
+      const start = body.indexOf(match);
+      if (!match || start < 0 || body.indexOf(match, start + 1) >= 0) {
+        const pin = entry.sourceKind === "canonical" || entry.sourceKind === "extra" ? undefined : readLock(project.root, false).find(({ ref }) => ref === entry.origin);
+        fail(`${project.modPath}:${item.line}: ${item.skill}.body.replace${item.agent ? ` on ${item.agent}` : ""} expected ${JSON.stringify(item.match.text)} exactly once (${pin ? `locked revision ${pin.rev}` : "no locked revision"})`, "Use text that occurs exactly once in the skill body at this override, or remove the override.");
+      }
+      body = body.slice(0, start) + readValue(item.value) + body.slice(start + match.length);
+    } else if (item.field === "body") {
+      const value = readValue(item.value);
+      body = item.operation === "append" ? body + value : value;
+    } else {
+      const value = readValue(item.value);
+      const old = document!.get(item.field);
+      document!.set(item.field, item.operation === "append" ? (old == null ? "" : String(old)) + value : value);
+    }
   }
-  return `---\n${document.toString({ lineWidth: 0 })}---\n${body}`;
+  if (document) return `---\n${document.toString({ lineWidth: 0 })}---\n${body}`;
+  const prefix = raw.slice(0, raw.length - upstreamBody.length).replaceAll("\r\n", "\n");
+  return prefix + (prefix && body && !prefix.endsWith("\n") ? "\n" : "") + body;
 }
-function bodyOf(text: string) {
+function bodyOf(text: string, crlf = false) {
   const lines = text.split("\n");
-  const end = frontmatterEnd(lines);
+  const end = frontmatterEnd(lines, crlf);
   return end === null ? text : lines.slice(end + 1).join("\n");
 }
 function filterFrontmatter(text: string, allowed: string[]) {
@@ -366,7 +383,7 @@ function resolveEntries(project: Project, options: ResolveOptions) {
   const mod = project.mod;
   if (mod.version === 2) {
     for (const skip of mod.skips) for (const name of skip.skills) if (!knownSkills.has(name)) unknownSkill(project, skip.line, name, "in skip");
-    for (const { skill, line } of mod.fieldOverrides) if (!knownSkills.has(skill)) unknownSkill(project, line, skill, "in front-matter override");
+    for (const { skill, field, line } of mod.fieldOverrides) if (!knownSkills.has(skill)) unknownSkill(project, line, skill, `in ${field === "body" ? "body" : "front-matter"} override`);
     for (const machine of Object.values(mod.setups)) for (const selector of machine.selectors) {
       if (!knownSkills.has(selector.name)) unknownSkill(project, selector.line!, selector.name, `in machine ${machine.name}`);
     }
@@ -395,21 +412,15 @@ function resolveEntries(project: Project, options: ResolveOptions) {
   return { skills: selectedSkills, allSkills: skills, commands, setupOmissions };
 }
 
-export function replacementFields(project: Project, paths: Record<string, string>, previous = new Map<string, string>(), skills = resolveEntries(project, { overrides: paths }).skills) {
-  if (project.mod.version !== 2 || !project.mod.fieldOverrides.some((item) => item.operation === "set")) return [];
-  const entries = new Map(skills.map((entry) => [entry.name, entry]));
-  return project.mod.fieldOverrides.filter((item) => item.operation === "set").map((item) => {
-    const entry = entries.get(item.skill)!;
-    const key = sha256(JSON.stringify([entry.origin, item.skill, item.field, item.agent]));
-    const old = previous.get(key);
-    if (old !== undefined) return { item, key, hash: old };
-    const raw = readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8");
-    const hash = sha256(JSON.stringify((item.agent ? [item.agent] : HARNESS_IDS).map((id) => {
-      const { document } = skillDocument(raw, id, entry.name);
-      return [document.has(item.field), document.toJS({ mapAsMap: true })?.get(item.field)];
-    }), (_, value) => value instanceof Map ? Object.fromEntries(value) : value));
-    return { item, key, hash };
-  });
+export function replacementKey(origin: string, item: FieldOverride) {
+  return sha256(JSON.stringify([origin, item.skill, item.field, item.agent]));
+}
+
+export function replacementHash(raw: string, item: FieldOverride) {
+  return item.field === "body" ? sha256(bodyOf(raw, true)) : sha256(JSON.stringify((item.agent ? [item.agent] : HARNESS_IDS).map((id) => {
+    const { document } = skillDocument(raw, id, item.skill);
+    return [document.has(item.field), document.toJS({ mapAsMap: true })?.get(item.field)];
+  }), (_, value) => value instanceof Map ? Object.fromEntries(value) : value));
 }
 
 function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, installPaths: HarnessInstallPaths, entries: ReturnType<typeof resolveEntries>): HarnessPlan {
@@ -440,7 +451,7 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
 
   const authoredSkills: SkillPlan[] = selectedEntries.map((entry) => {
     const raw = readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8");
-    const overridden = applyFieldOverrides(project, entry.name, id, raw);
+    const overridden = applyFieldOverrides(project, entry, id, raw);
     const body = renderSkill(id, facts, tokens, overridden, sourcePath(entry, "SKILL.md"));
     if (facts.agentSkillNames && (entry.name.length > 64 || !agentSkillName.test(entry.name))) fail(`invalid Agent Skill name ${JSON.stringify(entry.name)} rendered for ${id}`, "Rename the skill using at most 64 lowercase letters, numbers, and single hyphens.");
     return {
@@ -521,7 +532,12 @@ export function resolvePlan(project: Project, options: ResolveOptions = {}): Pro
   const harnesses: ProjectPlan["harnesses"] = {};
   for (const id of selected) harnesses[id] = buildHarness(project, id, facts[id], facts[id].installPaths[scope], entries);
   const baselines = project.mod.version === 2 && project.mod.fieldOverrides.some((item) => item.operation === "set") ? readOverrideBaselines(project.root) : new Map<string, string>();
-  const changedOverrides = baselines.size ? replacementFields(project, paths, undefined, entries.allSkills).filter(({ key, hash }) => baselines.has(key) && baselines.get(key) !== hash).map(({ item }) => item) : [];
+  const changedOverrides = baselines.size && project.mod.version === 2 ? project.mod.fieldOverrides.filter((item) => {
+    if (item.operation !== "set") return false;
+    const entry = entries.allSkills.find(({ name }) => name === item.skill)!;
+    const old = baselines.get(replacementKey(entry.origin, item));
+    return old !== undefined && old !== replacementHash(readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8"), item);
+  }) : [];
   return { project, harnesses, changedOverrides };
 }
 export function schemaFor(project: Project) {

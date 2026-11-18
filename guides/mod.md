@@ -8,11 +8,12 @@ Not `deps` (that resolves and fetches what this file declares).
 The first directive is `skillful 1` or `skillful 2`. `fmt` keeps that version.
 
 Use `skillful migrate` (or `skillful migrate --project ./agent`) to rewrite a
-skillful 1 manifest in place without changing `skill.lock`. Migration stops
-rather than guessing at render settings with no direct translation, such as
-custom tokens or setups with different agent lists. Migration lists the skills
-selected from each local or locked source; run `skillful fetch` first if a pin
-is missing from the cache.
+skillful 1 manifest in place. Migration keeps the revisions of selected sources,
+merges duplicate pins at the same revision, and removes unused pins. Run
+`skillful fetch` first if a pin is missing from the cache. Migration stops rather
+than guessing at settings with no direct translation, such as custom tokens or
+setups with different agent lists. If it cannot find an omitted skill, declare
+its source or remove the omission if the skill is retired.
 Install path overrides are preserved as comments and reported as warnings; they
 no longer apply. Run `skillful render` afterward to verify the delivered files.
 
@@ -47,11 +48,22 @@ angular-developer.description = "Angular guidance"
 angular-developer.description.append on pi = " Use the process tool for builds."
 ```
 
+Use `.body =` to replace the instructions or `.body.append =` to add text
+verbatim (include a leading newline if needed). Use `.body.replace` to swap an
+exact passage. Both operands can be quoted strings or project-relative paths.
+Rendering stops if the passage does not appear exactly once.
+
+```text
+angular-developer.body = ./overlays/angular-developer-full.md
+angular-developer.body.append on pi = "\nRun `ng build` through the process tool.\n"
+ketchup.body.replace "Draw a Mermaid diagram of the flow." with "Describe the flow as a numbered list."
+```
+
 Every-agent overrides run first, then agent-specific ones, each in file order.
 The agent's existing front-matter rules still apply. Overrides require a skill
-selected by the project. Run `skillful update` to record the upstream fields
-replaced by `=` in `skill.lock`; `skillful check` warns if those fields drift.
-Appends do not get drift warnings.
+selected by the project. Run `skillful update` to record the upstream fields and
+bodies replaced by `=` in `skill.lock`; `skillful check` warns if those drift.
+Appends and exact-passage replacements do not get drift warnings.
 
 Skillful 1 keeps `skills`, `commands`, and `rules` roots, `require` with `only` or
 `exclude`, and `harness` and `setup` blocks. Source paths stay inside their allowed
