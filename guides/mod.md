@@ -37,8 +37,10 @@ machine work-mac
 machine personal skip angular-developer angular-new-app
 ```
 
-`local` takes the skill root, then the command root. `use` names the exact skills
-from a `github:`, `git:`, or `path:` source. Each declared agent gets every
+`local` takes the skill root, then the command root. Without `local` or `rules`,
+Skillful uses `./skills`, `./commands`, and `./rules/global_agents.md` if present
+and skips any that are missing. Explicit paths must exist. `use` names the exact
+skills from a `github:`, `git:`, or `path:` source. Each declared agent gets every
 selected skill unless it is skipped for that agent or machine, or restricted by
 `only <skills> on <agents> "reason"`. An `only` line limits delivery to the named
 agents without adding them to the machine. Multiple `only` lines for the same

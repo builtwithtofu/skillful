@@ -87,6 +87,13 @@ export function resolveProjectPath(project: Project, value: string, kind: "direc
   return path;
 }
 
+export function resolveLocalRoot(project: Project, root: keyof SkillMod["roots"]) {
+  const value = project.mod.roots[root];
+  if (project.mod.version === 2 && !project.mod.rootDirectives.has(root === "rules" ? "rules" : "local")
+    && !lstatSync(join(project.root, value), { throwIfNoEntry: false })) return undefined;
+  return resolveProjectPath(project, value, root === "rules" ? "file" : "directory");
+}
+
 export function initProject(destination = process.cwd()) {
   const target = resolve(destination);
   const expected = Object.keys(BASIC_SCAFFOLD).sort();

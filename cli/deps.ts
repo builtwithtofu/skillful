@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { cacheKey, narHash } from "./nar.ts";
 import { readLock, readOverrideBaselines, pinFor, validateLock, writeLockAtomic, type LockEntry } from "./lock.ts";
 import { formatMod, migrateMod, type Require, type SkillMod } from "./mod.ts";
-import { isInside, resolveProjectPath, type Project } from "./project.ts";
+import { isInside, resolveLocalRoot, type Project } from "./project.ts";
 
 export type ParsedRef =
   | { type: "github"; ref: string; identity: string; owner: string; repo: string; subdir: string | undefined; version: string }
@@ -253,8 +253,9 @@ async function overrideBaselines(project: Project, before: LockEntry[], after: L
       if (requirement && old) oldRoot ??= effectiveRoot(project, requirement, await fetchEntry(old, cache));
       let file = oldRoot && join(oldRoot, item.skill, "SKILL.md");
       if (!file || !existsSync(file)) {
-        nextRoot ??= !requirement ? resolveProjectPath(project, mod.roots.skills, "directory")
+        nextRoot ??= !requirement ? resolveLocalRoot(project, "skills")
           : effectiveRoot(project, requirement, requirement.ref.startsWith("path:") ? project.root : await fetchEntry(next!, cache));
+        if (!nextRoot) continue;
         file = join(nextRoot, item.skill, "SKILL.md");
       }
       if (existsSync(file)) baselines.set(key, replacementHash(mod, readFileSync(file, "utf8"), item));

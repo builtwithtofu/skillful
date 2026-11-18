@@ -57,6 +57,7 @@ type OverrideValue = { kind: "string" | "file"; text: string };
 export type FieldOverride = WithComments<{ skill: string; field: string; value: OverrideValue; agent?: HarnessId; line: number } & ({ operation: "set" | "append" } | { operation: "replace"; match: OverrideValue })>;
 type SkillMod2 = SkillModBase & {
   version: 2;
+  rootDirectives: ReadonlySet<string>;
   agents: WithComments<{ ids: HarnessId[] }>;
   declarations: HarnessDeclaration[];
   skips: AgentSelection[];
@@ -334,8 +335,8 @@ export function parseMod(text: string, filename = "skill.mod"): SkillMod {
 }
 
 function parseMod2(base: SkillModBase, lines: string[], start: number, filename: string): SkillMod2 {
-  const mod: SkillMod2 = { ...base, version: 2, harnesses: Object.create(null), setups: Object.create(null), agents: { ids: [], comments: [] }, declarations: [], skips: [], only: [], fieldOverrides: [], trailingComments: [] };
   const single = new Set<string>();
+  const mod: SkillMod2 = { ...base, version: 2, rootDirectives: single, harnesses: Object.create(null), setups: Object.create(null), agents: { ids: [], comments: [] }, declarations: [], skips: [], only: [], fieldOverrides: [], trailingComments: [] };
   let pending: Comments = [];
   let machine: Setup | undefined;
   let harness: HarnessDeclaration | undefined;
@@ -494,8 +495,8 @@ function formatMod2(mod: SkillMod2): string {
   const lines = [...mod.headerComments, "skillful 2"];
   const section = (entries: string[][]) => { if (entries.length) lines.push("", ...entries.flat()); };
   section([
-    [...mod.rootComments.skills, `local ${quote(mod.roots.skills)} ${quote(mod.roots.commands)}`],
-    [...mod.rootComments.rules, `rules ${quote(mod.roots.rules)}`],
+    mod.rootDirectives.has("local") ? [...mod.rootComments.skills, `local ${quote(mod.roots.skills)} ${quote(mod.roots.commands)}`] : [],
+    mod.rootDirectives.has("rules") ? [...mod.rootComments.rules, `rules ${quote(mod.roots.rules)}`] : [],
   ]);
   section(mod.requires.map(({ ref, selectors, comments }) => [...comments, `use ${quote(ref)} { ${selectors.map(quote).join(" ")} }`]));
   const overrideValue = (value: OverrideValue) => value.kind === "string" ? JSON.stringify(value.text) : value.text;
@@ -661,7 +662,7 @@ export function migrateMod(mod: Extract<SkillMod, { version: 1 }>, filename: str
     });
     return [setup.name, { ...setup, comments, ...(declarations.length ? { declarations } : {}) }];
   }));
-  const next: SkillMod2 = { ...mod, version: 2, requires: [...requires.values()], agents: { ids, comments: agentComments }, declarations: [], skips, only: [], setups, fieldOverrides: [], trailingComments: [] };
+  const next: SkillMod2 = { ...mod, version: 2, rootDirectives: new Set(["local", "rules"]), requires: [...requires.values()], agents: { ids, comments: agentComments }, declarations: [], skips, only: [], setups, fieldOverrides: [], trailingComments: [] };
   const emitted = formatMod2(next).split("\n");
   for (const comment of mod.leadingComments) {
     const index = emitted.indexOf(comment);

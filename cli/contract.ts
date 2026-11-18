@@ -4,7 +4,7 @@ import { join, relative, resolve } from "node:path";
 import { loadHarnesses, type HarnessFacts, type HarnessInstallPaths } from "./harness.ts";
 import { isScalar, parseDocument } from "yaml";
 import { agentReadsShared, HARNESS_IDS, mapHarnesses, ModError, type BuiltinHarnessId, type FieldOverride, type HarnessId, type Omission, type Require, type Setup, type SkillMod } from "./mod.ts";
-import { resolveProjectPath, type Project } from "./project.ts";
+import { resolveLocalRoot, resolveProjectPath, type Project } from "./project.ts";
 import { cachedDependencyPaths } from "./deps.ts";
 import { readLock, readOverrideBaselines } from "./lock.ts";
 
@@ -361,8 +361,8 @@ function unknownSkill(project: Project, line: number, name: string, context: str
 export function resolveSkills(project: Project, overrides: Record<string, string>, extras: ExtraRoot[] = []) {
   const declared = new Set(project.mod.requires.map((requirement) => requirement.name));
   for (const name of Object.keys(overrides)) if (!declared.has(name)) fail(`override ${name} is not declared in skill.mod`, `Add a matching require or remove --override ${name}=PATH.`);
-  const canonicalRoot = resolveProjectPath(project, project.mod.roots.skills, "directory");
-  const skills: SkillEntry[] = sortedDirectoryNames(canonicalRoot).map((name) => ({ name, origin: "canonical", root: canonicalRoot, sourceKind: "canonical" }));
+  const canonicalRoot = resolveLocalRoot(project, "skills");
+  const skills: SkillEntry[] = canonicalRoot ? sortedDirectoryNames(canonicalRoot).map((name) => ({ name, origin: "canonical", root: canonicalRoot, sourceKind: "canonical" })) : [];
   for (const requirement of project.mod.requires) {
     const root = dependencyRoot(requirement, project, overrides);
     const names = sortedDirectoryNames(root.path).filter((candidate) => selectedBy(requirement, candidate));
@@ -407,8 +407,8 @@ function resolveEntries(project: Project, options: ResolveOptions) {
     return [entry.name, { code: "setup-omission", message: selector?.reason ?? `Not selected by setup ${setup!.name}.` }];
   }));
 
-  const commandRoot = resolveProjectPath(project, project.mod.roots.commands, "directory");
-  const commands: CommandEntry[] = sortedMarkdown(commandRoot).map((name) => ({ name, origin: "canonical", root: commandRoot, sourceKind: "standalone" }));
+  const commandRoot = resolveLocalRoot(project, "commands");
+  const commands: CommandEntry[] = commandRoot ? sortedMarkdown(commandRoot).map((name) => ({ name, origin: "canonical", root: commandRoot, sourceKind: "standalone" })) : [];
   for (const extra of options.extraRoots?.commands ?? []) {
     if (!extra.origin) fail("extra command root is missing an origin", "Give every extra root a stable provenance name.");
     const root = resolveOverride(extra.path, project, `extra command root ${extra.origin}`);
@@ -565,9 +565,8 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
   }) : [];
   const skills = [...authoredSkills, ...syntheticSkills].sort((left, right) => left.name.localeCompare(right.name));
 
-  const rulesPath = resolveProjectPath(project, project.mod.roots.rules, "file");
-  const rulesRaw = readFileSync(rulesPath, "utf8");
-  const rulesBody = renderText(project.mod, id, facts, tokens, rulesRaw, project.mod.roots.rules);
+  const rulesPath = resolveLocalRoot(project, "rules");
+  const rulesBody = rulesPath ? renderText(project.mod, id, facts, tokens, readFileSync(rulesPath, "utf8"), project.mod.roots.rules) : "";
   return {
     id,
     facts,
@@ -575,7 +574,7 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
     omittedSkills,
     skills,
     commands,
-    rules: { source: { kind: "canonical", path: "rules/global_agents.md" }, delivery: installPaths.rules ? { kind: "file", path: installPaths.rules } : null, sha256: sha256(rulesBody), body: rulesBody },
+    rules: { source: { kind: "canonical", path: "rules/global_agents.md" }, delivery: rulesPath && installPaths.rules ? { kind: "file", path: installPaths.rules } : null, sha256: sha256(rulesBody), body: rulesBody },
     assets: [],
   };
 }

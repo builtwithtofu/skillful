@@ -48,6 +48,40 @@ describe("project CLI", () => {
     expect(readFileSync(join(home, ".claude/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
   });
 
+  test("a four-line skill.mod checks and installs without local sources", () => {
+    const root = temp();
+    const project = join(root, "project");
+    const source = join(root, "source");
+    const home = temp();
+    mkdirSync(join(root, ".git"));
+    mkdirSync(project);
+    mkdirSync(join(source, "example"), { recursive: true });
+    writeFileSync(join(source, "example", "SKILL.md"), "---\nname: example\ndescription: Example\n---\nImported body.\n");
+    const mod = join(project, "skill.mod");
+    writeFileSync(mod, `skillful 2\nuse path:${relative(project, source)} { example }\nagents claude pi codex\nmachine laptop\n`);
+    for (const args of [["check"], ["install", "laptop"], ["fmt"], ["check"]]) {
+      const result = runIn(project, home, ...args);
+      expect(result.exitCode, output(result).stderr).toBe(0);
+    }
+    for (const agent of [".claude", ".agents"]) {
+      expect(readFileSync(join(home, agent, "skills/example/SKILL.md"), "utf8")).toContain("Imported body.");
+    }
+    expect(existsSync(join(home, ".claude/CLAUDE.md"))).toBe(false);
+    expect(readdirSync(project)).toEqual(["skill.mod"]);
+  });
+
+  test.each([
+    ["local ./skills ./commands", "directory path does not exist: ./commands"],
+    ["rules ./rules/global_agents.md", "file path does not exist: ./rules/global_agents.md"],
+  ])("check requires explicitly declared sources: %s", (directive, message) => {
+    const project = temp();
+    mkdirSync(join(project, "skills"));
+    writeFileSync(join(project, "skill.mod"), `skillful 2\n${directive}\nagents claude\nmachine laptop\n`);
+    const result = run(project, "check");
+    expect(result.exitCode).not.toBe(0);
+    expect(output(result).stderr).toContain(message);
+  });
+
   test("harness paths merge by field, including for a new agent", () => {
     const { project, home } = machineFixture();
     const mod = join(project, "skill.mod");

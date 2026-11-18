@@ -50,7 +50,7 @@ export function resolveSetup(project: Project, name: string, options: ResolveOpt
       }
     }
     if (output.paths.commands) for (const command of harness.commands) add(join(output.paths.commands, command.name).replaceAll("\\", "/"), output.name, `${output.name}/commands/${command.name}`);
-    if (output.paths.rules) add(output.paths.rules, output.name, `${output.name}/rules.md`);
+    if (output.paths.rules && (!v2 || harness.rules.delivery)) add(output.paths.rules, output.name, `${output.name}/rules.md`);
   }
   return {
     name,
