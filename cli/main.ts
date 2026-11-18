@@ -135,8 +135,8 @@ export function createProgram() {
 
   program.commandsGroup("Project:");
   program.command("init")
-    .summary("Create a project scaffold: skill.mod, skills/, commands/, rules/")
-    .description("Create a new skillful project: skill.mod plus skills/, commands/, and rules/ scaffolding.")
+    .summary("Create a skillful 2 project scaffold")
+    .description("Create a skillful 2 project with example skills, commands, rules, and a named machine.")
     .addHelpText("after", INIT_AFTER_HELP)
     .addOption(new Option("--dir <directory>", "destination directory").argParser(collect))
     .action((options: { dir?: string[] }) => {

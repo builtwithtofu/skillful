@@ -39,8 +39,11 @@ Idempotent: re-running in an existing scaffold reports that and changes nothing.
 Examples:
   skillful init --dir ./agent
 
-Afterward:
-  skillful fmt --check
+  cd ./agent
+  skillful render
+  skillful install example --dry-run
+
+Next:
   skillful skills show author
 `;
 

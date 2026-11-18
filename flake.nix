@@ -131,7 +131,7 @@
             env -i HOME="$HOME" PATH=/nonexistent ${skillful}/bin/skillful list harnesses --project "$TMPDIR/project" > "$TMPDIR/harnesses"
             env -i HOME="$HOME" PATH=/nonexistent ${skillful}/bin/skillful render --project "$TMPDIR/project" --out "$TMPDIR/rendered"
             grep -Fx opencode "$TMPDIR/harnesses"
-            test -f "$TMPDIR/rendered/pi/skills/example/SKILL.md"
+            test -f "$TMPDIR/rendered/.agents/skills/example/SKILL.md"
             touch "$out"
           '';
           source-maintenance = pkgs.runCommand "skillful-source-maintenance-check" {
@@ -186,9 +186,8 @@
           '';
           fixture-render = fixture.rendered;
           fixture-harness = pkgs.runCommand "skillful-fixture-harness-check" { } ''
-            test -f ${fixture.rendered}/pi/skills/example/SKILL.md
-            test -f ${fixture.rendered}/claude/skills/example/SKILL.md
-            test -f ${fixture.rendered}/opencode/skills/example/SKILL.md
+            test -f ${fixture.rendered}/.agents/skills/example/SKILL.md
+            test -f ${fixture.rendered}/.claude/skills/example/SKILL.md
             test -f ${(fixture.forHarness "pi").skills}/example/SKILL.md
             test -f ${(fixture.forHarness "pi").commands}/standalone.md
             test -f ${(fixture.forHarness "pi").rules}

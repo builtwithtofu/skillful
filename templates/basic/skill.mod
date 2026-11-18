@@ -1,29 +1,8 @@
-skillful 1
+skillful 2
 
-skills ./skills
-commands ./commands
+local ./skills ./commands
 rules ./rules/global_agents.md
 
-harness claude (
-  token audience "Claude Code"
-)
+agents claude codex cursor grok opencode pi
 
-harness codex (
-  token audience "Codex"
-)
-
-harness cursor (
-  token audience "Cursor"
-)
-
-harness grok (
-  token audience "Grok"
-)
-
-harness opencode (
-  token audience "OpenCode"
-)
-
-harness pi (
-  token audience "Pi"
-)
+machine example

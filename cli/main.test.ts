@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { cacheKey, narHash } from "./nar.ts";
+import { copyBasicFixture } from "./test-fixture.ts";
 
 const dirs: string[] = [];
 const temp = () => { const dir = join(tmpdir(), `skillful-main-${crypto.randomUUID()}`); mkdirSync(dir); dirs.push(dir); return dir; };
@@ -360,7 +361,7 @@ example.body.replace "More." with "Extra."
     const project = join(root, "project");
     const home = join(root, "home");
     mkdirSync(home);
-    expect(run(root, "init", "--dir", project).exitCode).toBe(0);
+    copyBasicFixture(project);
     const mod = join(project, "skill.mod");
     writeFileSync(mod, `${readFileSync(mod, "utf8").trimEnd()}
 
@@ -590,8 +591,6 @@ machine personal skip tool
     const root = temp();
     expect(run(root, "init").exitCode).toBe(0);
     renameSync(join(root, "skills"), join(root, "local-skills"));
-    const example = join(root, "local-skills", "example", "SKILL.md");
-    writeFileSync(example, readFileSync(example, "utf8").replace("{{audience}}", "each agent"));
     renameSync(join(root, "commands"), join(root, "prompts"));
     renameSync(join(root, "rules", "global_agents.md"), join(root, "rules.md"));
     for (const name of ["foreign", "unselected"]) {

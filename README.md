@@ -80,6 +80,16 @@ Put `dist/skillful` on your `PATH`.
 
 ## Start
 
+Try a local-only project without editing any files:
+
+```sh
+skillful init --dir ./example-agent
+cd ./example-agent
+skillful render
+skillful install example --dry-run
+```
+
+To build the project shown above instead, start in a separate directory.
 A project is a directory holding `skill.mod`, your own skills, commands and
 rules, and the `skill.lock` that skillful writes.
 

@@ -21,24 +21,27 @@ function run(...args: string[]) {
 }
 
 describe("standalone executable", () => {
-  test("runs setup and custom-path commands without Bun on PATH", () => {
+  test("initializes, renders and installs a skillful 2 project without Bun on PATH", () => {
     expect(run("init", "--dir", project).exitCode).toBe(0);
+    expect(readFileSync(join(project, "skill.mod"), "utf8")).toStartWith("skillful 2\n");
     const listed = run("list", "harnesses", "--project", project);
     expect(listed.exitCode).toBe(0);
     expect(new TextDecoder().decode(listed.stdout)).toBe("claude\ncodex\ncursor\ngrok\nopencode\npi\n");
     expect(run("render", "--project", project, "--out", rendered).exitCode).toBe(0);
-    expect(existsSync(join(rendered, "pi", "skills", "example", "SKILL.md"))).toBe(true);
-    expect(run("install", "--project", project, "--harness", "opencode", "--root", root, "--path", "skills=.config/opencode-v2/skills", "--path", "commands=.config/opencode-v2/commands").exitCode).toBe(0);
-    expect(existsSync(join(root, ".config", "opencode-v2", "skills", "example", "SKILL.md"))).toBe(true);
-    expect(existsSync(join(root, ".config", "opencode", "skills", "example", "SKILL.md"))).toBe(false);
+    expect(existsSync(join(rendered, ".agents", "skills", "example", "SKILL.md"))).toBe(true);
 
-    const mod = join(project, "skill.mod");
-    const setupRendered = join(root, "setup-rendered");
-    writeFileSync(mod, `${readFileSync(mod, "utf8").trimEnd()}\n\nsetup portable (\n  pi claude\n)\n`);
-    expect(run("list", "setups", "--project", project).exitCode).toBe(0);
-    expect(run("render", "portable", "--project", project, "--out", setupRendered).exitCode).toBe(0);
-    expect(existsSync(join(setupRendered, "pi", "skills", "example", "SKILL.md"))).toBe(true);
-    expect(existsSync(join(setupRendered, "opencode"))).toBe(false);
+    const dryRun = run("install", "example", "--project", project, "--dry-run");
+    expect(dryRun.exitCode).toBe(0);
+    expect(dryRun.stdout.toString()).toContain(".agents/skills/example/SKILL.md");
+    expect(existsSync(join(root, ".agents"))).toBe(false);
+    expect(run("install", "example", "--project", project).exitCode).toBe(0);
+    expect(existsSync(join(root, ".agents", "skills", "example", "SKILL.md"))).toBe(true);
+
+    const customRoot = join(root, "custom");
+    mkdirSync(customRoot);
+    expect(run("install", "--project", project, "--harness", "opencode", "--root", customRoot, "--path", "skills=.config/opencode-v2/skills", "--path", "commands=.config/opencode-v2/commands").exitCode).toBe(0);
+    expect(existsSync(join(customRoot, ".config", "opencode-v2", "skills", "example", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(customRoot, ".config", "opencode", "skills", "example", "SKILL.md"))).toBe(false);
   });
 
   test("allows only one concurrent installation to own shared destinations", async () => {
