@@ -21,6 +21,7 @@ Getting oriented
 
 Common commands
   skillful init --dir DIR
+  skillful migrate --project DIR
   skillful add github:owner/repo
   skillful list skills
   skillful list setups
@@ -53,6 +54,18 @@ Examples:
 
 Afterward:
   skillful check --strict
+`;
+
+export const MIGRATE_AFTER_HELP = `
+Use when moving an existing project to skillful 2; skillful 1 still works.
+Migration stops if a setting cannot be translated without changing the render.
+Migration lists skills from each source. If a pin is missing from the cache, run skillful fetch first.
+Install path overrides are kept as comments, not applied by skillful 2.
+
+Example:
+  skillful migrate --project ./agent
+
+Afterward, use skillful render to verify the output and review any install path warnings.
 `;
 
 export const ADD_AFTER_HELP = `

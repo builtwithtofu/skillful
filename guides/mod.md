@@ -7,6 +7,15 @@ Not `deps` (that resolves and fetches what this file declares).
 
 The first directive is `skillful 1` or `skillful 2`. `fmt` keeps that version.
 
+Use `skillful migrate` (or `skillful migrate --project ./agent`) to rewrite a
+skillful 1 manifest in place without changing `skill.lock`. Migration stops
+rather than guessing at render settings with no direct translation, such as
+custom tokens or setups with different agent lists. Migration lists the skills
+selected from each local or locked source; run `skillful fetch` first if a pin
+is missing from the cache.
+Install path overrides are preserved as comments and reported as warnings; they
+no longer apply. Run `skillful render` afterward to verify the delivered files.
+
 ```text
 skillful 2
 
