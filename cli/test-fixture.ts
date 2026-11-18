@@ -10,6 +10,6 @@ function makeWritable(path: string) {
 }
 
 export function copyBasicFixture(destination: string) {
-  cpSync(join(import.meta.dir, "..", "templates", "basic"), destination, { recursive: true });
+  cpSync(join(import.meta.dir, "..", "tests", "fixtures", "basic-v1"), destination, { recursive: true });
   makeWritable(destination);
 }

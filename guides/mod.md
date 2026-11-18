@@ -69,8 +69,14 @@ Skillful 1 keeps `skills`, `commands`, and `rules` roots, `require` with `only` 
 `exclude`, and `harness` and `setup` blocks. Source paths stay inside their allowed
 roots in both versions.
 
+`init` writes a skillful 2 project with local examples and an `example` machine.
+Render it or preview an install before making any edits:
+
 ```bash
-skillful init --dir DIR
+skillful init --dir ./agent
+cd ./agent
+skillful render
+skillful install example --dry-run
 skillful fmt --check
 skillful fmt
 skillful check
