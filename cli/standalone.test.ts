@@ -37,6 +37,7 @@ describe("standalone executable", () => {
     expect(run("install", "example", "--project", project).exitCode).toBe(0);
     expect(existsSync(join(root, ".agents", "skills", "example", "SKILL.md"))).toBe(true);
 
+    writeFileSync(join(project, "skill.mod"), "skillful 1\nharness opencode (\n)\n");
     const customRoot = join(root, "custom");
     mkdirSync(customRoot);
     expect(run("install", "--project", project, "--harness", "opencode", "--root", customRoot, "--path", "skills=.config/opencode-v2/skills", "--path", "commands=.config/opencode-v2/commands").exitCode).toBe(0);
@@ -50,6 +51,7 @@ describe("standalone executable", () => {
     expect(run("init", "--dir", firstProject).exitCode).toBe(0);
     expect(run("init", "--dir", secondProject).exitCode).toBe(0);
     for (const projectRoot of [firstProject, secondProject]) {
+      writeFileSync(join(projectRoot, "skill.mod"), "skillful 1\nharness pi (\n)\n");
       const references = join(projectRoot, "skills", "example", "references");
       mkdirSync(references, { recursive: true });
       for (let index = 0; index < 500; index++) writeFileSync(join(references, `${index}.md`), `${projectRoot}\n`);

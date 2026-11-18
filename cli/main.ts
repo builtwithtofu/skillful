@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { readFileSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { Argument, Command, CommanderError, Option } from "commander";
 import { addDependency, fetchDependencies, migrateProject, updateDependencies } from "./deps.ts";
 import { normalizeHarness } from "./harness.ts";
@@ -294,11 +295,11 @@ export function createProgram() {
     });
 
   program.command("install")
-    .summary("Install a setup or one harness into a destination root")
-    .description("Safely install a named setup or one public harness.")
+    .summary("Install a machine, setup, or skillful 1 harness")
+    .description("Install the matching machine from skill.mod, or select one by name.")
     .addHelpText("after", INSTALL_AFTER_HELP)
-    .argument("[setup]", "named setup")
-    .option("--harness <harness>", "one-off harness to install")
+    .argument("[name]", "machine or setup name")
+    .option("--harness <harness>", "one-off harness to install (skillful 1 only)")
     .addOption(new Option("--root <directory>", "destination root (default: setup root or current home)").argParser(collect))
     .addOption(new Option("--path <category=path>", "override one harness destination; repeatable").argParser(collect))
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
@@ -311,6 +312,7 @@ export function createProgram() {
     .addOption(internalRootOption("--extra-command-root <origin=path>", "internal named command root"))
     .action((setupName: string | undefined, options: { harness?: string; root?: string[]; path?: string[]; project?: string[]; sourceRoot?: string[]; dryRun?: boolean; remove?: boolean; force?: boolean; override?: string[]; extraSkillRoot?: string[]; extraCommandRoot?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project"), sourceRoot: one(options.sourceRoot, "--source-root") });
+      if (project.mod.version === 2 && options.harness) throw new CliUsageError("skillful 2 install does not accept --harness", "Declare agents in skill.mod and run `skillful install [machine]`.");
       if (options.remove) {
         if (options.harness) throw new CliUsageError("install --remove cannot mix with --harness", "Pass the retired setup name instead.");
         if (options.path?.length) throw new CliUsageError("install --remove cannot mix with --path", "Removal uses destinations recorded in the receipt.");
@@ -321,6 +323,12 @@ export function createProgram() {
         const result = removeSetup(project, setupName, { root: one(options.root, "--root"), dryRun: options.dryRun });
         printChanges(options.dryRun ? "Would remove from" : "Removed from", result.root, result.changes);
         return;
+      }
+      if (project.mod.version === 2 && !setupName) {
+        const shortHostname = hostname().toLowerCase().split(".")[0]!;
+        const machines = Object.keys(project.mod.setups).sort();
+        if (!machines.includes(shortHostname)) throw new CliUsageError(`no machine matches hostname ${JSON.stringify(shortHostname)}`, `Run \`skillful install <machine>\`. Declared machines: ${machines.join(", ") || "none"}.`);
+        setupName = shortHostname;
       }
       if (setupName && options.harness) throw new CliUsageError("install cannot mix a setup with --harness", "Choose one named setup or one-off harness.");
       if (setupName && options.path?.length) throw new CliUsageError("install cannot mix a setup with --path", "Declare setup path exceptions in skill.mod.");

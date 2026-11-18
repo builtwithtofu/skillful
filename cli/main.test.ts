@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { cacheKey, narHash } from "./nar.ts";
 import { copyBasicFixture } from "./test-fixture.ts";
@@ -35,31 +35,36 @@ describe("project CLI", () => {
     return { project, home: temp(), split };
   }
 
-  test("one-off Codex and Pi installs keep differing instructions out of the shared folder", () => {
-    const { project, home, split } = machineFixture();
-    split();
-    for (const harness of ["codex", "pi", "codex", "pi"]) {
-      const result = runIn(project, home, "install", "--harness", harness, "--root", home);
-      expect(result.exitCode, output(result).stderr).toBe(0);
-    }
-    expect(readFileSync(join(home, ".codex/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
-    expect(readFileSync(join(home, ".pi/agent/skills/example/SKILL.md"), "utf8")).toContain("Pi instructions.");
-    expect(existsSync(join(home, ".agents/skills/example"))).toBe(false);
+  test("install picks the short hostname and a named machine overrides it", () => {
+    const { project, home } = machineFixture();
+    const host = hostname().toLowerCase().split(".")[0]!;
+    const other = host === "desk" ? "laptop" : "desk";
+    writeFileSync(join(project, "skill.mod"), `skillful 2\nagents claude\nmachine ${host}\nmachine ${other} skip example\n`);
+    const named = runIn(project, home, "install", other, "--dry-run");
+    expect(named.exitCode, output(named).stderr).toBe(0);
+    expect(output(named).stdout).not.toContain(".claude/skills/example/SKILL.md");
+    const automatic = runIn(project, home, "install");
+    expect(automatic.exitCode, output(automatic).stderr).toBe(0);
+    expect(readFileSync(join(home, ".claude/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
   });
 
-  test("a one-off install refuses to duplicate a machine-owned shared skill", () => {
+  test("install lists declared machines when the hostname does not match", () => {
     const { project, home } = machineFixture();
-    const mod = join(project, "skill.mod");
-    writeFileSync(mod, "skillful 2\nagents pi\nmachine desk\n");
-    expect(runIn(project, home, "install", "desk", "--root", home).exitCode).toBe(0);
-    writeFileSync(mod, 'skillful 2\nagents pi codex\nmachine desk\nexample.body on codex = "Codex instructions."\n');
+    const host = hostname().toLowerCase().split(".")[0];
+    const machines = ["desk", "laptop", "work"].filter((name) => name !== host).slice(0, 2);
+    writeFileSync(join(project, "skill.mod"), `skillful 2\nagents claude\n${machines.map((name) => `machine ${name}\n`).join("")}`);
+    const result = runIn(project, home, "install");
+    expect(result.exitCode).toBe(2);
+    expect(output(result).stderr).toContain(`Declared machines: ${machines.join(", ")}.`);
+    expect(existsSync(join(home, ".claude"))).toBe(false);
+  });
 
-    const result = runIn(project, home, "install", "--harness", "codex", "--root", home);
-    expect(result.exitCode, output(result).stderr).toBe(1);
-    expect(output(result).stderr).toContain(".agents/skills/example/SKILL.md");
-    expect(readFileSync(join(home, ".agents/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
-    expect(existsSync(join(home, ".codex/skills/example/SKILL.md"))).toBe(false);
-    expect(runIn(project, home, "install", "desk", "--root", home).exitCode).toBe(0);
+  test("skillful 2 install rejects --harness", () => {
+    const { project, home } = machineFixture();
+    const result = runIn(project, home, "install", "--harness", "pi");
+    expect(result.exitCode).toBe(2);
+    expect(output(result).stderr).toContain("skillful 2 install does not accept --harness");
+    expect(existsSync(join(home, ".pi"))).toBe(false);
   });
 
   test("render and install honor a skip for a shared reader outside the agents list", () => {
@@ -336,7 +341,7 @@ example.body.replace "More." with "Extra."
     expect(output(help).stdout.toLowerCase()).not.toContain("nix");
 
     const root = temp();
-    expect(run(root, "init").exitCode).toBe(0);
+    writeFileSync(join(root, "skill.mod"), "skillful 1\nharness opencode (\n)\n");
     const unknown = run(root, "install", "--harness", "opencode", "--path", "tools=.config/tools");
     expect(unknown.exitCode).toBe(2);
     expect(output(unknown).stderr).toContain("unknown --path tools");
