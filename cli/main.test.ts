@@ -169,7 +169,7 @@ machine desk
   test("a renderer fence selects only its declared custom harness", () => {
     const { project, home } = machineFixture();
     writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi editor\nharness editor { skills .editor/skills }\nmachine desk\n");
-    writeFileSync(join(project, "skills/example/SKILL.md"), "---\nname: example\ndescription: Example\n---\nDefault body.\n{{#editor}}\nEditor only.\n{{/}}\n");
+    writeFileSync(join(project, "skills/example/SKILL.md"), "---\nname: example\ndescription: Example\n---\nDefault body.\n<!-- only editor -->\nEditor only.\n<!-- end -->\n");
     const checked = run(project, "check", "--harness", "pi");
     expect(checked.exitCode, output(checked).stderr).toBe(0);
     const installed = runIn(project, home, "install", "desk");
@@ -603,6 +603,24 @@ angular-developer.when_to_use = "On Angular projects"
     }
   });
 
+  test("rejects legacy body fences in a verified pinned dependency", () => {
+    const root = temp();
+    const source = temp();
+    mkdirSync(join(source, "external"));
+    writeFileSync(join(source, "external/SKILL.md"), "{{#pi}}\nPi instructions.\n{{/}}\n");
+    const hash = narHash(source);
+    const cache = join(root, "cache");
+    mkdirSync(join(cache, "skillful"), { recursive: true });
+    renameSync(source, join(cache, "skillful", cacheKey(hash)));
+    const ref = "github:example/skills@main";
+    writeFileSync(join(root, "skill.lock"), `pinned ${ref} ${"a".repeat(40)} ${hash}\n`);
+    writeFileSync(join(root, "skill.mod"), `skillful 2\nuse ${ref} { external }\nagents pi\n`);
+    const result = Bun.spawnSync(["bun", join(import.meta.dir, "main.ts"), "render"], { cwd: root, env: { ...process.env, XDG_CACHE_HOME: cache } });
+    expect(result.exitCode).toBe(1);
+    expect(output(result).stderr).toContain(`external/${ref}/external/SKILL.md:1: legacy markup {{#pi}}`);
+    expect(output(result).stderr).toContain("<!-- only AGENT");
+  });
+
   test.each([
     ["adds a description without front matter", "Plain instructions.\n", 'example.description = "New guidance"', "---\ndescription: New guidance\n---\nPlain instructions.\n"],
     ["replaces only the body with CRLF front matter", "---\r\nname: example\r\ndescription: Example\r\n---\r\nOriginal body.\r\n", 'example.body = "New body"', "---\nname: example\ndescription: Example\n---\nNew body"],
@@ -650,6 +668,7 @@ example.body.replace "More." with "Extra."
     expect(stdout).toContain("skillful <command> --help");
     expect(stdout).toContain("A command is a saved prompt the person runs by name, separate from any skill");
     expect(stdout).toContain("init [options]");
+    expect(stdout).toContain("Rewrite skill.mod and local body fences");
     expect(stdout).toContain("render [options]");
     expect(stdout).toContain("install [options]");
     expect(stdout.toLowerCase()).not.toContain("nix");
@@ -811,6 +830,25 @@ setup work-mac (
   });
 
 
+  test("init accepts an untouched scaffold with the original README", () => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    writeFileSync(join(root, "README.md"), `# A skillful project
+
+From this directory, render the example and preview where it would install:
+
+\`\`\`sh
+skillful render
+skillful install example --dry-run
+\`\`\`
+
+Edit \`skill.mod\` and the files under \`skills/\`, \`commands/\`, and \`rules/\` to make
+this project your own. Run \`skillful skills show mod\` for the manifest guide.
+`);
+    const result = run(root, "init");
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    expect(output(result).stdout).toContain("already initialized");
+  });
   test("init then fmt --check is a Bun-only journey", () => {
     const root = temp();
     expect(run(root, "init").exitCode).toBe(0);
@@ -828,7 +866,12 @@ setup work-mac (
     const root = temp();
     const project = join(root, "agent");
     expect(run(root, "init", "--dir", project).exitCode).toBe(0);
-    writeFileSync(join(project, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example guidance\n---\n\nLocal body\n");
+    const skill = join(project, "skills/example/SKILL.md");
+    const command = join(project, "commands/standalone.md");
+    const rules = join(project, "rules/global_agents.md");
+    writeFileSync(skill, "---\nname: example\ndescription: Example guidance\n---\n\nLocal body\n{{#pi}}\nPi skill.\n{{/}}\n`{{#pi}}` is an example.\n");
+    writeFileSync(command, "{{^claude}}\nNon-Claude command.\n{{/}}\n");
+    writeFileSync(rules, "{{#pi claude}}\nShared rule.\n{{/}}\n");
     for (const name of ["external", "unused"]) {
       const dir = join(project, "vendor", name);
       mkdirSync(dir, { recursive: true });
@@ -864,6 +907,9 @@ setup laptop (
     const migrated = run(root, "migrate", "--project", project);
     expect(output(migrated).stderr).toBe("");
     expect(migrated.exitCode).toBe(0);
+    expect(readFileSync(skill, "utf8")).toContain("<!-- only pi -->\nPi skill.\n<!-- end -->\n`{{#pi}}` is an example.");
+    expect(readFileSync(command, "utf8")).toBe("<!-- skip claude -->\nNon-Claude command.\n<!-- end -->\n");
+    expect(readFileSync(rules, "utf8")).toBe("<!-- only pi claude -->\nShared rule.\n<!-- end -->\n");
     const text = readFileSync(mod, "utf8");
     expect(text).toStartWith("// Header\nskillful 2\n");
     expect(text).toContain("use path:./vendor { external }");
@@ -937,6 +983,73 @@ setup laptop (
     expect(migrated.exitCode, output(migrated).stderr).toBe(1);
     expect(output(migrated).stderr).toContain("omit-skill vendor for pi");
     expect(readFileSync(mod, "utf8")).toBe(original);
+  });
+  test.each([
+    ["code", "- Example:\n  ```markdown\n  {{#pi}}\n  Prompt.\n  {{/}}\n  ````\n"],
+    ["a comment", "<!-- Example:\n\n{{#pi}}\nPrompt.\n{{/}}\n-->\n"],
+  ])("migrate refuses a legacy fence inside %s without writing anything", (context, command) => {
+    const project = temp();
+    expect(run(project, "init").exitCode).toBe(0);
+    const original = {
+      "skill.mod": "skillful 1\nharness pi (\n)\n",
+      "skill.lock": "\n",
+      "skills/example/SKILL.md": "{{#pi}}\nSkill.\n{{/}}\n",
+      "commands/standalone.md": command,
+    };
+    for (const [path, body] of Object.entries(original)) writeFileSync(join(project, path), body);
+    const result = run(project, "migrate");
+    expect(result.exitCode).toBe(1);
+    expect(output(result).stderr).toContain(`commands/standalone.md:3: cannot migrate legacy renderer fence inside ${context}`);
+    for (const [path, body] of Object.entries(original)) expect(readFileSync(join(project, path), "utf8")).toBe(body);
+  });
+
+  test("migrate refuses a skillful 1 comment that skillful 2 would read as a fence", () => {
+    const project = temp();
+    expect(run(project, "init").exitCode).toBe(0);
+    const original = {
+      "skill.mod": "skillful 1\nharness pi (\n)\n",
+      "skill.lock": "\n",
+      "commands/standalone.md": "Intro.\n<!-- only pi -->\nImportant.\n<!-- end -->\n`<!-- end -->`\n",
+    };
+    for (const [path, body] of Object.entries(original)) writeFileSync(join(project, path), body);
+    const result = run(project, "migrate");
+    expect(result.exitCode).toBe(1);
+    expect(output(result).stderr).toContain("commands/standalone.md:2: cannot migrate an HTML comment that skillful 2 reads as a renderer fence");
+    for (const [path, body] of Object.entries(original)) expect(readFileSync(join(project, path), "utf8")).toBe(body);
+  });
+
+  test("migrate refuses legacy frontmatter fences without rewriting local bodies", () => {
+    const project = temp();
+    expect(run(project, "init").exitCode).toBe(0);
+    const mod = join(project, "skill.mod");
+    const manifest = "skillful 1\nharness pi (\n)\n";
+    const skill = join(project, "skills/example/SKILL.md");
+    const source = "---\nname: example\n{{#pi}}\ndescription: Pi guidance\n{{/}}\n---\n{{#pi}}\nPi body.\n{{/}}\n";
+    writeFileSync(mod, manifest);
+    writeFileSync(skill, source);
+    const result = run(project, "migrate");
+    expect(result.exitCode).toBe(1);
+    expect(output(result).stderr).toContain("skills/example/SKILL.md:3: cannot migrate legacy brace markup in frontmatter");
+    expect(output(result).stderr).toContain('For a token, write its literal value. Run skillful migrate, then add <skill>.<field> on <agent> = "value" in the skillful 2 skill.mod if needed.');
+    expect(readFileSync(mod, "utf8")).toBe(manifest);
+    expect(readFileSync(skill, "utf8")).toBe(source);
+  });
+  test.each(["skills/example/SKILL.md", "commands/standalone.md", "rules/global_agents.md"])("migrate refuses tokens in %s without writing anything", (file) => {
+    const project = temp();
+    expect(run(project, "init").exitCode).toBe(0);
+    const original = {
+      "skill.mod": "skillful 1\nharness pi (\n)\n",
+      "skill.lock": "\n",
+      "skills/example/SKILL.md": "{{#pi}}\nSkill.\n{{/}}\n",
+      "commands/standalone.md": "{{#pi}}\nCommand.\n{{/}}\n",
+      "rules/global_agents.md": "{{#pi}}\nRules.\n{{/}}\n",
+    };
+    original[file] += "Use {{tool/name}}.\n";
+    for (const [path, body] of Object.entries(original)) writeFileSync(join(project, path), body);
+    const result = run(project, "migrate");
+    expect(result.exitCode).toBe(1);
+    expect(output(result).stderr).toContain(`${file}:4: cannot migrate legacy markup {{tool/name}} in body`);
+    for (const [path, body] of Object.entries(original)) expect(readFileSync(join(project, path), "utf8")).toBe(body);
   });
   test("migrate leaves a manifest alone when it cannot translate a render setting", () => {
     const project = temp();

@@ -150,6 +150,7 @@ describe("dependency transactions and cache", () => {
     const { project, dependency, ref, cache } = fixture();
     writeFileSync(join(project, "skills/example/SKILL.md"), "Local body.\n");
     writeFileSync(join(project, "skill.mod"), `skillful 2\nagents pi\nuse ${ref} { skill-a }\nskill-a.body = "Project body."\n`);
+    writeFileSync(join(project, "rules/global_agents.md"), "Shared rules.\n");
     const updated = run(project, cache, "update");
     expect(updated.exitCode, updated.stderr.toString()).toBe(0);
     const lock = join(project, "skill.lock");
@@ -216,6 +217,7 @@ describe("dependency transactions and cache", () => {
     const { project, ref, cache, dependency } = fixture();
     const modPath = join(project, "skill.mod");
     const manifest = (source: string, override = true) => `skillful 2\nuse ${source} { skill-a }\nagents pi\n${override ? 'skill-a.body = "Project guidance"\nskill-a.description = "Project description"\n' : ""}`;
+    writeFileSync(join(project, "rules/global_agents.md"), "Shared rules.\n");
     writeFileSync(join(project, "skills", "example", "SKILL.md"), "Example instructions.\n");
     writeFileSync(modPath, manifest(ref, mode !== "existing pin"));
     if (mode === "add") await addDependency(discoverProject({ project }), ref, { cache });

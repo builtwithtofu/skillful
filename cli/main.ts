@@ -165,8 +165,8 @@ export function createProgram() {
     });
 
   program.command("migrate")
-    .summary("Rewrite skill.mod from skillful 1 to skillful 2")
-    .description("Rewrite skill.mod in place, retaining only the pins still needed, without installing anything.")
+    .summary("Rewrite skill.mod and local body fences from skillful 1 to skillful 2")
+    .description("Rewrite skill.mod and local body fences in place, retaining needed pins without installing anything.")
     .addHelpText("after", MIGRATE_AFTER_HELP)
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
     .action(async (options: { project?: string[] }) => {
@@ -263,7 +263,7 @@ export function createProgram() {
 
   addSourceOptions(program.command("schema")
     .summary("Describe harness facts and renderer markup")
-    .description("Describe harness facts and renderer markup."), false)
+    .description("Describe harness facts and markup for this project's skillful version."), false)
     .action((options: SourceOptionValues) => { const source = sourceArguments(options); schemaCommand(source.project, source); });
 
   program.commandsGroup("Deliver:");

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { ModError, formatMod, formatText, parseMod } from "./mod.ts";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { harnessPlan, resolvePlan } from "./contract.ts";
+import { discoverProject } from "./project.ts";
 
 const full = `// Project comment
 skillful 1
@@ -24,6 +29,22 @@ harness pi (
 `;
 
 describe("skill.mod", () => {
+  test.each([
+    ["set", "example.body = ./override.md", "Pi only.\n", "Elsewhere.\n"],
+    ["append", "example.body.append = ./override.md", "Before.\nPi only.\n", "Before.\nElsewhere.\n"],
+    ["replace", 'example.body.replace "Before.\\n" with ./override.md', "Pi only.\n", "Elsewhere.\n"],
+  ])("renders fences after a body %s override", (_operation, directive, pi, claude) => {
+    const project = mkdtempSync(join(tmpdir(), "skillful-mod-test-"));
+    try {
+      mkdirSync(join(project, "skills/example"), { recursive: true });
+      writeFileSync(join(project, "skills/example/SKILL.md"), "Before.\n");
+      writeFileSync(join(project, "override.md"), "<!-- only pi -->\nPi only.\n<!-- end -->\n<!-- skip pi -->\nElsewhere.\n<!-- end -->\n");
+      writeFileSync(join(project, "skill.mod"), `skillful 2\nagents pi claude\n${directive}\n`);
+      const plan = resolvePlan(discoverProject({ project }));
+      expect(harnessPlan(plan, "pi").skills[0]?.body).toBe(pi);
+      expect(harnessPlan(plan, "claude").skills[0]?.body).toBe(claude);
+    } finally { rmSync(project, { recursive: true, force: true }); }
+  });
   test("parses defaults, JSON escapes, comments, and blocks", () => {
     const mod = parseMod(full, "skill.mod");
     expect(mod.roots).toEqual({ skills: "./my-skills", commands: "./my commands", rules: "./rules.md" });
