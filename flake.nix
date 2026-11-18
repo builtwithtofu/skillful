@@ -45,6 +45,13 @@
             source = self;
             projectDir = "tests/fixtures/setup-project";
           };
+          machineFixture = mkProject {
+            inherit pkgs;
+            source = self;
+            projectDir = "tests/fixtures/machine-project";
+          };
+          travelSetup = machineFixture.forSetup "travel";
+          deskSetup = machineFixture.forSetup "desk";
           derivationProject = pkgs.runCommand "skillful-derivation-project" { } ''
             cp -r ${./templates/basic} "$out"
           '';
@@ -77,9 +84,9 @@
             lib = pkgs.lib;
             facts = { claude = { }; opencode = { }; pi = { }; };
           };
-          invalidUnsafe = builtins.tryEval (builtins.deepSeq (parseSetupMod ./tests/fixtures/setup-mod/unsafe/skill.mod) true);
-          invalidMixed = builtins.tryEval (builtins.deepSeq (parseSetupMod ./tests/fixtures/setup-mod/mixed/skill.mod) true);
-          invalidRootHome = builtins.tryEval (builtins.deepSeq (parseSetupMod ./tests/fixtures/setup-mod/root-home/skill.mod) true);
+          invalidUnsafe = builtins.tryEval (builtins.deepSeq (parseSetupMod ./tests/fixtures/setup-mod/unsafe/skill.mod).setups true);
+          invalidMixed = builtins.tryEval (builtins.deepSeq (parseSetupMod ./tests/fixtures/setup-mod/mixed/skill.mod).setups true);
+          invalidRootHome = builtins.tryEval (builtins.deepSeq (parseSetupMod ./tests/fixtures/setup-mod/root-home/skill.mod).setups true);
           unknownSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "missing") true);
           overlappingSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "overlap") true);
           nestedOverlappingSetup = builtins.tryEval (builtins.deepSeq (setupFixture.forSetup "nested-overlap") true);
@@ -213,16 +220,37 @@
                 personal = projectionFor personalSetup;
                 work-mac = projectionFor workSetup;
                 uppercase = projectionFor uppercaseSetup;
+                travel = projectionFor travelSetup;
+                desk = projectionFor deskSetup;
               };
             } ''
               printf '%s\n' "$expectedSetups" > expected.json
-              for name in personal work-mac uppercase; do
-                skillful setup show "$name" --format json --project ${self}/tests/fixtures/setup-project \
+              for name in personal work-mac uppercase travel desk; do
+                case "$name" in
+                  travel|desk)
+                    project=${self}/tests/fixtures/machine-project
+                    overrides=(--override "github:angular/skills@main=${githubTree.outPath}")
+                    ;;
+                  *)
+                    project=${./tests/fixtures/setup-project}
+                    overrides=()
+                    ;;
+                esac
+                skillful setup show "$name" --format json --project "$project" "''${overrides[@]}" \
                   | jq -S '{ schemaVersion, setup: { name: .setup.name, root: .setup.root, selection: .setup.selection, harnesses: (.setup.harnesses | sort_by(.name)) } }' \
                   > "$name-cli.json"
                 jq -S --arg name "$name" '.[$name]' expected.json > "$name-nix.json"
                 diff -u "$name-nix.json" "$name-cli.json"
               done
+
+              skillful render travel --project ${self}/tests/fixtures/machine-project --source-root ${self} \
+                --override "github:angular/skills@main=${githubTree.outPath}" --out "$TMPDIR/travel-cli"
+              diff -r ${travelSetup.rendered} "$TMPDIR/travel-cli"
+              test -f ${travelSetup.rendered}/pi/skills/angular-developer/SKILL.md
+              test ! -e ${travelSetup.rendered}/claude/skills/angular-developer
+              test -f ${travelSetup.rendered}/claude/skills/local/SKILL.md
+              test ! -e ${travelSetup.rendered}/pi/skills/desk-only
+              test ! -e ${travelSetup.rendered}/claude/skills/desk-only
 
               for project in ${./tests/fixtures/setup-mod/unsafe} ${./tests/fixtures/setup-mod/mixed} ${./tests/fixtures/setup-mod/root-home}; do
                 if skillful fmt --check --project "$project"; then exit 1; fi

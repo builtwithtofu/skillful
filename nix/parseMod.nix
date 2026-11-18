@@ -7,7 +7,7 @@ let
   text = builtins.readFile path;
   fail = line: message: throw "${filename}:${toString line}: ${message}";
   whitespace = character: builtins.elem character [ " " "\t" "\n" "\r" ];
-  tokenize = line: raw:
+  tokenize = compact: line: raw:
     let
       length = builtins.stringLength raw;
       characterAt = index: builtins.substring index 1 raw;
@@ -23,8 +23,11 @@ let
           in if !escaped && character == "\""
           then index
           else quotedEnd (index + 1) (if escaped then false else character == "\\");
+      punctuation = character: builtins.elem character [ "{" "}" "=" ];
+      token = quoted: value: if compact then { inherit quoted value; } else value;
       bareEnd = index:
         if index < length && !whitespace (characterAt index)
+          && (!compact || (!punctuation (characterAt index) && characterAt index != "\""))
         then bareEnd (index + 1)
         else index;
       go = index: tokens:
@@ -41,15 +44,15 @@ let
             decoded = builtins.tryEval (builtins.fromJSON literal);
           in if !decoded.success
           then fail line "invalid JSON string"
-          else go (end + 1) (tokens ++ [ decoded.value ])
+          else go (end + 1) (tokens ++ [ (token true decoded.value) ])
         else
           let
-            end = bareEnd start;
+            end = if compact && punctuation (characterAt start) then start + 1 else bareEnd start;
             value = builtins.substring start (end - start) raw;
-            valid = value == "(" || value == ")" || (builtins.match ''[^[:space:]()"]+'' value != null && !lib.hasInfix "//" value);
+            valid = compact || value == "(" || value == ")" || (builtins.match ''[^[:space:]()"]+'' value != null && !lib.hasInfix "//" value);
           in if !valid
           then fail line "invalid bare token ${builtins.toJSON value}"
-          else go end (tokens ++ [ value ]);
+          else go end (tokens ++ [ (token false value) ]);
     in go 0 [ ];
   normalizePath = line: value:
     let
@@ -97,15 +100,11 @@ let
   step = state: entry:
     let
       line = entry.index + 1;
-      tokens = tokenize line entry.value;
+      tokens = tokenize false line entry.value;
       count = builtins.length tokens;
       first = if count == 0 then null else builtins.elemAt tokens 0;
     in if count == 0
     then state
-    else if !state.header
-    then if tokens == [ "skillful" "1" ]
-    then state // { header = true; }
-    else fail line "first semantic directive must be: skillful 1"
     else if state.current == null
     then
       if first != "setup"
@@ -157,17 +156,61 @@ let
       let
         added = lib.foldl' (innerState: name: addHarness line innerState name) state tokens;
       in added;
+  stepV2 = state: entry:
+    let
+      line = entry.index + 1;
+      tokens = tokenize true line entry.value;
+      directive = builtins.head tokens;
+      args = builtins.tail tokens;
+      values = map (token: token.value) args;
+    in if tokens == [ ] || directive.quoted then state
+    else if directive.value == "agents" then
+      if state.agents != null then fail line "agents may appear at most once"
+      else if values == [ ] then fail line "agents must list at least one agent"
+      else state // {
+        agents = map (name:
+          if builtins.hasAttr name facts then { inherit name; paths = { }; }
+          else fail line "unknown agent ${builtins.toJSON name}"
+        ) (lib.unique values);
+      }
+    else if directive.value == "machine" then
+      let
+        name = requireName line "machine" (if args == [ ] then "" else builtins.head values);
+        skip = builtins.elemAt args 1;
+        skills = lib.drop 2 args;
+      in if builtins.hasAttr name state.setups then fail line "duplicate machine ${name}"
+      else if builtins.length args > 1 && (skip.quoted || skip.value != "skip" || skills == [ ]
+        || builtins.any (token: token.value == "" || (!token.quoted && builtins.elem token.value [ "{" "}" "=" ])) skills)
+      then fail line "machine must be: machine <name> [skip <skills>]"
+      else state // { setups = state.setups // {
+        ${name} = {
+          inherit name;
+          root = "home";
+          selection = {
+            mode = if skills == [ ] then "all" else "omit";
+            skills = map (token: { name = token.value; }) skills;
+          };
+        };
+      }; }
+    else state;
   entries = lib.imap0 (index: value: { inherit index value; }) (lib.splitString "\n" text);
-  parsed = lib.foldl' step { setups = { }; current = null; inner = null; header = false; } entries;
-  finalized =
-    if lib.hasInfix "\r" text
-    then fail 1 "skill.mod must use LF line endings"
-    else if !parsed.header
-    then fail 1 "first semantic directive must be: skillful 1"
-    else if parsed.inner != null
-    then fail parsed.current.line "unclosed setup harness block"
-    else if parsed.current != null
-    then fail parsed.current.line "unclosed setup block"
-    else parsed.setups;
+  header = lib.findFirst (entry: tokenize false (entry.index + 1) entry.value != [ ]) { index = 0; value = ""; } entries;
+  headerTokens = tokenize false (header.index + 1) header.value;
+  version =
+    if lib.hasInfix "\r" text then fail 1 "skill.mod must use LF line endings"
+    else if headerTokens == [ "skillful" "1" ] then 1
+    else if headerTokens == [ "skillful" "2" ] then 2
+    else fail (header.index + 1) "first semantic directive must be: skillful 1 or skillful 2";
+  body = lib.drop (header.index + 1) entries;
+  parsedV1 = lib.foldl' step { setups = { }; current = null; inner = null; } body;
+  parsedV2 = lib.foldl' stepV2 { setups = { }; agents = null; } body;
 in
-finalized
+{
+  inherit version;
+  setups = if version == 2 then builtins.mapAttrs (name: setup: setup // {
+    harnesses = if parsedV2.agents == null then throw "skillful machine ${name} selects no agents" else parsedV2.agents;
+  }) parsedV2.setups
+  else if parsedV1.inner != null then fail parsedV1.current.line "unclosed setup harness block"
+  else if parsedV1.current != null then fail parsedV1.current.line "unclosed setup block"
+  else parsedV1.setups;
+}

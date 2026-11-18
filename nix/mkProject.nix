@@ -58,7 +58,8 @@ let
       inherit value;
     }) harnessFiles);
   knownHarnesses = builtins.attrNames facts;
-  setupDeclarations = (import ./parseMod.nix { inherit lib facts; }) (checkedProjectRoot + "/skill.mod");
+  manifest = (import ./parseMod.nix { inherit lib facts; }) (checkedProjectRoot + "/skill.mod");
+  setupDeclarations = manifest.setups;
   setupNames = builtins.attrNames setupDeclarations;
   pathConflict = left: right:
     left == "." || right == "." || left == right
@@ -127,10 +128,14 @@ let
       root = fetched.outPath;
     in if subdir == null || subdir == "" then root else root + "/${subdir}";
   lockedOverrides = builtins.listToAttrs (map (entry: {
-    inherit (entry) name;
-    value = if builtins.hasAttr entry.name dependencyOverrides then dependencyOverrides.${entry.name} else fetchLocked entry;
+    name = if manifest.version == 2 then entry.ref else entry.name;
+    value = dependencyOverrides.${entry.name} or (fetchLocked entry);
   }) lockEntries);
-  resolvedOverrides = builtins.mapAttrs (name: path: storePath "dependency-${name}" path) (lockedOverrides // dependencyOverrides);
+  pinNames = map (entry: entry.name) lockEntries;
+  explicitOverrides = if lockEntries != [ ] && manifest.version == 2
+    then removeAttrs dependencyOverrides pinNames
+    else dependencyOverrides;
+  resolvedOverrides = builtins.mapAttrs (name: path: storePath "dependency-${lib.strings.sanitizeDerivationName name}" path) (lockedOverrides // explicitOverrides);
   overrideArgs = lib.concatLists (lib.mapAttrsToList (name: path: [ "--override" "${name}=${toString path}" ]) resolvedOverrides);
   normalizedExtraRoots = {
     skills = map (entry: entry // { source = storePath "extra-skill-${entry.origin}" entry.source; }) checkedExtraRoots.skills;
