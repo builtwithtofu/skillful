@@ -5,6 +5,7 @@ short hostname. If none matches, it lists the declared machines. To select one
 explicitly, run `skillful install personal`. `machine personal skip
 company-database` uses the listed `agents` and skips that skill for all of them.
 Preview the machine with `render personal` or `setup show personal`.
+`setup show` lists rules paths only when the machine installs rules.
 
 Skillful 1 uses setup blocks for skill selection, harness outputs, root kind,
 and path exceptions:

@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { contractFor, harnessIds, harnessPlan, publicSkill, resolvePlan, sha256, skillRoot, type ProjectPlan, type ResolveOptions, type SkillPlan } from "./contract.ts";
+import { contractFor, harnessIds, harnessPlan, publicSkill, resolvePlan, sha256, sharedSkillsPath, skillRoot, type ProjectPlan, type ResolveOptions, type SkillPlan } from "./contract.ts";
 import { agentReadsShared, type HarnessId } from "./mod.ts";
 import type { Project } from "./project.ts";
 
@@ -31,6 +31,7 @@ type RenderState = {
   projectRoot: string;
   projectId: string;
   harness: string;
+  setup?: string | undefined;
   files: Record<string, string>;
 };
 
@@ -114,14 +115,14 @@ function writeSkill(stage: string, root: string, skill: SkillPlan) {
   }
 }
 
-function writeSkills(stage: string, plan: ProjectPlan) {
+function writeSkills(stage: string, plan: ProjectPlan, setup: string | undefined) {
   const roots = new Set<string>();
   for (const { id, root, skill } of plan.placements) {
     if (root === id) continue;
     writeSkill(stage, root, skill);
     roots.add(root.split("/")[0]!);
   }
-  for (const root of roots) writeState(stage, plan, root);
+  for (const root of roots) writeState(stage, plan, root, setup);
 }
 
 export function writeHarnessArtifacts(stage: string, plan: ProjectPlan, harness: HarnessId, allSkills: boolean) {
@@ -136,11 +137,11 @@ export function writeHarnessArtifacts(stage: string, plan: ProjectPlan, harness:
   writeText(join(root, "rules.md"), selected.rules.body);
 }
 
-function writeHarness(stage: string, plan: ProjectPlan, harness: HarnessId) {
+function writeHarness(stage: string, plan: ProjectPlan, harness: HarnessId, setup: string | undefined) {
   writeHarnessArtifacts(stage, plan, harness, plan.project.mod.version === 1);
   const root = join(stage, harness);
   writeText(join(root, ".skillful", "contract.json"), `${JSON.stringify(contractFor(plan), null, 2)}\n`);
-  writeState(stage, plan, harness);
+  writeState(stage, plan, harness, setup);
 }
 
 function refreshSkillContract(stage: string, plan: ProjectPlan, harness: HarnessId, force: boolean) {
@@ -169,10 +170,10 @@ function refreshSkillContract(stage: string, plan: ProjectPlan, harness: Harness
   return true;
 }
 
-function writeState(stage: string, plan: ProjectPlan, harness: string) {
+function writeState(stage: string, plan: ProjectPlan, harness: string, setup: string | undefined) {
   const root = join(stage, harness);
   const files = hashesUnder(root, true);
-  const state: RenderState = { schemaVersion: 1, projectRoot: plan.project.root, projectId: projectId(plan.project), harness, files };
+  const state: RenderState = { schemaVersion: 1, projectRoot: plan.project.root, projectId: projectId(plan.project), harness, setup, files };
   writeText(join(root, ".skillful", "render.json"), `${JSON.stringify(state, null, 2)}\n`);
 }
 function plannedChanges(oldRoot: string | null, nextRoot: string, harnesses: string[]) {
@@ -215,12 +216,17 @@ export function renderProject(project: Project, options: RenderOptions = {}): Re
   const targetExists = existsSync(target);
   const existingManaged = targetExists && statSync(target).isDirectory() ? managedHarnesses(target) : [];
   const targeted = options.harnesses?.length ? options.harnesses : undefined;
-  const readsShared = (id: HarnessId) => agentReadsShared(project.mod, id);
+  const previousLayout = sharedLayout && targeted
+    ? [".agents", ...targeted].filter((id) => existingManaged.includes(id)).map((id) => readState(target, id)).find((state) => state?.setup && state.projectId === projectId(project))
+    : undefined;
+  const previousSetup = previousLayout?.setup;
+  const setup = options.setup ?? (previousSetup && Object.hasOwn(project.mod.setups, previousSetup) ? previousSetup : undefined);
+  const readsShared = (id: HarnessId) => agentReadsShared(project.mod, id, setup ? project.mod.setups[setup] : undefined);
   const sharedRender = sharedLayout && (!targeted || targeted.some(readsShared));
   const previouslyRendered = sharedRender && targeted
     ? existingManaged.filter(readsShared)
     : [];
-  const plan = resolvePlan(project, options, previouslyRendered);
+  const plan = resolvePlan(project, { ...options, setup }, previouslyRendered);
   const harnesses = harnessIds(plan);
   const ownedHarnesses = [...new Set([
     ...harnesses,
@@ -246,12 +252,25 @@ export function renderProject(project: Project, options: RenderOptions = {}): Re
       cpSync(target, stage, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
     } else mkdirSync(stage, { recursive: true });
     for (const harness of ownedHarnesses) rmSync(join(stage, harness), { recursive: true, force: true });
-    for (const harness of harnesses) writeHarness(stage, plan, harness);
-    if (sharedLayout) writeSkills(stage, plan);
+    for (const harness of harnesses) writeHarness(stage, plan, harness, sharedLayout ? setup : undefined);
+    if (sharedLayout) writeSkills(stage, plan, setup);
     const changes = plannedChanges(targetExists ? target : null, stage, ownedHarnesses);
     for (const id of plan.regroupedSkills.keys()) {
       if (!refreshSkillContract(stage, plan, id, Boolean(options.force))) continue;
       changes.push({ path: `${id}/.skillful/contract.json`, action: "change" }, { path: `${id}/.skillful/render.json`, action: "change" });
+    }
+    if (targeted) {
+      const removedSharedPaths = new Set(changes.filter(({ action, path }) => action === "delete" && path.startsWith(`${sharedSkillsPath}/`)).map(({ path }) => path));
+      if (removedSharedPaths.size) for (const id of existingManaged) {
+        if (ownedHarnesses.includes(id) || plan.regroupedSkills.has(id)) continue;
+        const path = join(target, id, ".skillful", "contract.json");
+        if (!existsSync(path)) continue;
+        const { manifest } = JSON.parse(readFileSync(path, "utf8")) as ReturnType<typeof contractFor>;
+        for (const skill of manifest.harnesses[id]?.skills ?? []) for (const { delivery } of [skill, ...skill.supportFiles]) {
+          if (removedSharedPaths.has(delivery.path)) fail(`partial render would remove ${delivery.path} still used by ${id}`,
+            setup ? `Run \`skillful render ${setup}\` to refresh all of the machine's outputs.` : "Run a full render without --harness, naming the machine if applicable.");
+        }
+      }
     }
     if (options.dryRun) { rmSync(stage, { recursive: true, force: true }); return { out: target, changes, dryRun: true }; }
     commitStagedTree(stage, target);

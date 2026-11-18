@@ -177,6 +177,98 @@ machine desk
     expect(readFileSync(join(home, ".editor/skills/example/SKILL.md"), "utf8")).toContain("Editor only.");
     expect(readFileSync(join(home, ".pi/agent/skills/example/SKILL.md"), "utf8")).not.toContain("Editor only.");
   });
+
+  test("unused rules paths do not prevent a machine install", () => {
+    const { project, home } = machineFixture();
+    rmSync(join(project, "rules"), { recursive: true });
+    writeFileSync(join(project, "skill.mod"), `skillful 2
+agents pi editor
+harness editor { skills .editor/skills rules .pi/agent/AGENTS.md }
+machine desk
+`);
+    const install = () => runIn(project, home, "install", "desk");
+    const result = install();
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    expect(existsSync(join(home, ".editor/skills/example/SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".pi/agent/skills/example/SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".pi/agent/AGENTS.md"))).toBe(false);
+    const shown = run(project, "setup", "show", "desk");
+    expect(shown.exitCode, output(shown).stderr).toBe(0);
+    expect(output(shown).stdout).not.toContain("rules=");
+    mkdirSync(join(project, "rules"));
+    writeFileSync(join(project, "rules/global_agents.md"), "Rules.\n");
+    expect(output(install()).stderr).toContain("overlapping destinations");
+  });
+
+  test("changing skip to an equivalent only keeps the existing shared skill", () => {
+    const { project, home } = machineFixture();
+    const header = "skillful 2\nagents claude codex pi\nmachine desk\n";
+    const manifest = join(project, "skill.mod");
+    const install = () => runIn(project, home, "install", "desk");
+    writeFileSync(manifest, header + 'skip example on claude "For shared readers."\n');
+    expect(install().exitCode).toBe(0);
+    expect(existsSync(join(home, ".agents/skills/example/SKILL.md"))).toBe(true);
+    writeFileSync(manifest, header + 'only example on codex pi "For shared readers."\n');
+    const result = install();
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    expect(output(result).stdout).toContain("0 add, 0 change, 0 delete");
+  });
+
+  test.each(["pi", "pi codex"])("a machine takes over the earlier one-agent install: %s", (agents) => {
+    const { project, home } = machineFixture();
+    const manifest = join(project, "skill.mod");
+    const prior = join(home, ".pi/agent/skills/example/SKILL.md");
+    writeFileSync(manifest, "skillful 1\nharness pi (\n)\n");
+    expect(runIn(project, home, "install", "--harness", "pi").exitCode).toBe(0);
+    const body = readFileSync(prior, "utf8");
+    writeFileSync(manifest, `skillful 2\nagents ${agents}\nmachine desk\n`);
+    const install = () => runIn(project, home, "install", "desk");
+    const result = install();
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    if (agents.includes("codex")) {
+      expect(readFileSync(join(home, ".agents/skills/example/SKILL.md"), "utf8")).toBe(body);
+      expect(existsSync(prior)).toBe(false);
+    } else expect(readFileSync(prior, "utf8")).toBe(body);
+    expect(output(install()).stdout).toContain("0 add, 0 change, 0 delete");
+  });
+
+  test.each(["harness codex", "setup work"])("a private install refuses a shared copy owned by %s", (owner) => {
+    const { project, home } = machineFixture();
+    const manifest = join(project, "skill.mod");
+    if (owner === "harness codex") {
+      writeFileSync(manifest, "skillful 1\nharness codex (\n)\n");
+      expect(runIn(project, home, "install", "--harness", "codex").exitCode).toBe(0);
+      writeFileSync(manifest, "skillful 2\nagents pi\nmachine desk\n");
+    } else {
+      writeFileSync(manifest, "skillful 2\nagents pi editor\nharness editor { skills .editor/skills }\nmachine desk\nmachine work {\n  harness editor { reads-shared }\n}\n");
+      rmSync(join(project, "commands"), { recursive: true });
+      rmSync(join(project, "rules"), { recursive: true });
+      expect(runIn(project, home, "install", "work").exitCode).toBe(0);
+    }
+    const shared = join(home, ".agents/skills/example/SKILL.md");
+    expect(existsSync(shared)).toBe(true);
+    const result = runIn(project, home, "install", "desk", "--force");
+    expect(result.exitCode, output(result).stderr).toBe(1);
+    expect(output(result).stderr).toContain(owner);
+    expect(output(result).stderr).toContain(".agents/skills/example/SKILL.md");
+    expect(existsSync(shared)).toBe(true);
+    expect(existsSync(join(home, ".pi/agent/skills/example/SKILL.md"))).toBe(false);
+  });
+
+  test("a shared install refuses a private copy owned by another machine", () => {
+    const { project, home } = machineFixture();
+    writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi editor\nharness editor { skills .editor/skills }\nmachine desk\nmachine work {\n  harness editor { reads-shared }\n}\n");
+    rmSync(join(project, "commands"), { recursive: true });
+    rmSync(join(project, "rules"), { recursive: true });
+    const desk = runIn(project, home, "install", "desk");
+    expect(desk.exitCode, output(desk).stderr).toBe(0);
+    const work = runIn(project, home, "install", "work", "--force");
+    expect(work.exitCode, output(work).stderr).toBe(1);
+    expect(output(work).stderr).toContain("skillful install desk --remove --root ");
+    expect(output(work).stderr).toContain("skills/example/SKILL.md");
+    expect(existsSync(join(home, ".pi/agent/skills/example/SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".agents/skills/example/SKILL.md"))).toBe(false);
+  });
   test("migrate treats the explicit v1 Codex default as the shared destination", () => {
     const { project, home } = machineFixture();
     writeFileSync(join(project, "skill.mod"), `skillful 1
@@ -243,6 +335,41 @@ setup desk (
     expect(result.exitCode, output(result).stderr).toBe(0);
     expect(output(result).stdout).toContain("0 add, 0 change, 0 delete");
     expect(readFileSync(join(home, ".work/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
+  });
+
+  test("refreshing Pi retains the delivery of a machine-defined shared reader", () => {
+    const { project } = machineFixture();
+    writeFileSync(join(project, "skill.mod"), `skillful 2
+agents pi editor
+harness editor { skills .editor/skills }
+machine desk {
+  harness editor { reads-shared }
+}
+`);
+    expect(run(project, "render", "desk").exitCode).toBe(0);
+    const rendered = run(project, "render", "--harness", "pi");
+    expect(rendered.exitCode, output(rendered).stderr).toBe(0);
+    const root = join(project, "rendered");
+    const { manifest } = JSON.parse(readFileSync(join(root, "editor/.skillful/contract.json"), "utf8"));
+    const skill = manifest.harnesses.editor.skills.find((item: { name: string }) => item.name === "example");
+    expect(readFileSync(join(root, skill.delivery.path), "utf8")).toContain("Default body.");
+  });
+
+  test("a partial render cannot strand a former shared reader's delivery", () => {
+    const { project } = machineFixture();
+    const manifest = join(project, "skill.mod");
+    const header = "skillful 2\nagents pi editor\nharness editor { skills .editor/skills }\n";
+    writeFileSync(manifest, header + "machine desk {\n  harness editor { reads-shared }\n}\n");
+    expect(run(project, "render", "desk").exitCode).toBe(0);
+    writeFileSync(manifest, header + "machine desk\n");
+    const result = run(project, "render", "--harness", "pi");
+    expect(result.exitCode, output(result).stderr).toBe(1);
+    expect(output(result).stderr).toContain("skillful render desk");
+    const root = join(project, "rendered");
+    const { manifest: contract } = JSON.parse(readFileSync(join(root, "editor/.skillful/contract.json"), "utf8"));
+    expect(readFileSync(join(root, contract.harnesses.editor.skills[0].delivery.path), "utf8")).toContain("Default body.");
+    expect(run(project, "render", "desk").exitCode).toBe(0);
+    expect(existsSync(join(root, ".harness-editor/skills/example/SKILL.md"))).toBe(true);
   });
   test("install lists declared machines when the hostname does not match", () => {
     const { project, home } = machineFixture();
@@ -353,6 +480,46 @@ setup desk (
     expect(existsSync(pi)).toBe(true);
   });
 
+  test("a long reference filename survives a shared-to-private install", () => {
+    const { project, home, split } = machineFixture();
+    const path = `references/${"r".repeat(220)}.md`;
+    writeFileSync(join(project, "skills/example", path), "Reference.\n");
+    const install = () => runIn(project, home, "install", "desk");
+    const baseline = install();
+    expect(baseline.exitCode, output(baseline).stderr).toBe(0);
+    expect(readFileSync(join(home, ".agents/skills/example", path), "utf8")).toBe("Reference.\n");
+    split();
+    const result = install();
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    expect(existsSync(join(home, ".agents/skills/example", path))).toBe(false);
+    expect(readFileSync(join(home, ".pi/agent/skills/example", path), "utf8")).toBe("Reference.\n");
+  });
+  test.skipIf(process.platform === "win32")("restarts a shared-to-private move interrupted after a rename", async () => {
+    const { project, home } = machineFixture();
+    const references = join(project, "skills/example/references");
+    for (let i = 0; i < 300; i++) writeFileSync(join(references, `ref-${i}.md`), `Reference ${i}\n`);
+    const install = () => runIn(project, home, "install", "desk");
+    expect(install().exitCode).toBe(0);
+    const shared = join(home, ".agents/skills/example/SKILL.md");
+    writeFileSync(join(project, "skill.mod"), 'skillful 2\nagents codex pi\nmachine desk\nonly example on pi "Pi only."\n');
+    const child = Bun.spawn(["bun", join(import.meta.dir, "main.ts"), "install", "desk"], {
+      cwd: project, stdout: "ignore", stderr: "ignore", env: { ...process.env, HOME: home, XDG_STATE_HOME: join(home, ".state") },
+    });
+    const deadline = Date.now() + 5000;
+    while (existsSync(shared) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(1);
+    child.kill("SIGKILL");
+    await child.exited;
+    expect(child.signalCode).toBe("SIGKILL");
+    expect(existsSync(shared)).toBe(false);
+    const lock = readdirSync(home).find((name) => name.startsWith(".skillful-install-") && name.endsWith(".lock"));
+    expect(lock).toBeDefined();
+    rmSync(join(home, lock!), { recursive: true });
+    const retry = install();
+    expect(retry.exitCode, output(retry).stderr).toBe(0);
+    expect(existsSync(join(home, ".agents/skills/example"))).toBe(false);
+    expect(readFileSync(join(home, ".pi/agent/skills/example/references/ref-299.md"), "utf8")).toBe("Reference 299\n");
+    expect(output(install()).stdout).toContain("0 add, 0 change, 0 delete");
+  });
   test("a machine render contract points at the shared and private installed files", () => {
     const { project, home, split } = machineFixture();
     for (const [codex, pi] of [[".agents/skills", ".agents/skills"], [".codex/skills", ".pi/agent/skills"]]) {

@@ -125,9 +125,13 @@ export const RENDER_AFTER_HELP = `
 By default, render uses the agents in skillful 2 or the declared harnesses in
 skillful 1. Name a machine or setup to apply its skill selection. In skillful 2,
 at least two shared-folder agents must get the same copy to use .agents/skills.
+Pass a built-in or top-level declared agent to --harness.
+Conditional fences can also target agents listed in skillful 2.
 Claude Code uses .claude/skills. A --harness render can regroup other already-
-rendered agents' skills and refresh their contracts without touching commands or
-rules. Only install writes live harness destinations.
+rendered agents' skills in the same machine layout and refresh their contracts
+without touching commands or rules. If a partial render would remove a skill a
+retained agent still uses, render the full machine instead. Only install writes
+live harness destinations.
 
 Examples:
   skillful render --dry-run
@@ -153,6 +157,12 @@ Machine installs use .agents/skills only when at least two shared-folder agents
 get the same copy. A lone reader, differing skills, and agents that don't read
 the shared folder use separate folders. Use --root to relocate. Only skillful 1
 supports one-off --harness installs and their --path overrides.
+A machine install takes over earlier one-agent installs for its agents from the
+same project and destination root. It refuses to install a private copy for a
+shared-folder agent if another installation owns that skill in .agents/skills.
+It also refuses to publish a shared copy if another installation in the same
+root owns a private copy in a shared reader's skills path.
+After an interrupted install, follow the lock recovery instructions and rerun install.
 --remove retires a named setup from its receipt;
 pass --root after deleting its declaration. Valid source overrides are ignored
 during removal because destination ownership comes only from the receipt. Removal
@@ -169,7 +179,7 @@ Examples:
 export const SETUP_AFTER_HELP = `
 A skillful 2 machine uses the declared agents and can skip skills for that machine.
 A skillful 1 setup can also select a root and override destination paths. Showing
-one is read-only.
+one is read-only. In skillful 2, show lists rules paths only when rules install.
 
 Examples:
   skillful list setups

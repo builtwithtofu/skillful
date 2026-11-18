@@ -202,6 +202,7 @@ let
       if bare directive "}" && args == [ ] && machine.declarations != { } then state // { machine = null; }
       else if bare directive "skip" && args != [ ] && builtins.all pathToken args then updateMachine { selection = addSkips machine.selection args; }
       else fail line "invalid machine block entry"
+    else if bare directive "rules" then state // { explicitRules = true; }
     else if bare directive "agents" then
       if state.agents != null then fail line "agents may appear at most once"
       else if values == [ ] then fail line "agents must list at least one agent"
@@ -232,7 +233,7 @@ let
     else fail (header.index + 1) "first semantic directive must be: skillful 1 or skillful 2";
   body = lib.drop (header.index + 1) entries;
   parsedV1 = lib.foldl' step { setups = { }; current = null; inner = null; } body;
-  v2 = lib.foldl' stepV2 { setups = { }; agents = null; declarations = { }; machine = null; inner = null; } body;
+  v2 = lib.foldl' stepV2 { setups = { }; agents = null; declarations = { }; machine = null; inner = null; explicitRules = false; } body;
   parsedV2 = if v2.inner != null || v2.machine != null then fail (builtins.length entries) "unclosed machine or harness block" else v2;
   resolveAgent = declarations: name:
     let
@@ -251,6 +252,7 @@ let
 in
 {
   inherit version;
+  explicitRules = version == 2 && parsedV2.explicitRules;
   homeHarnessPaths = if version == 2 then lib.genAttrs knownHarnesses (name: (resolveAgent { } name).paths) else { };
   setups = if version == 2 then builtins.mapAttrs (name: setup: setup // {
     harnesses = if parsedV2.agents == null then throw "skillful machine ${name} selects no agents" else map (resolveAgent setup.declarations) parsedV2.agents;
