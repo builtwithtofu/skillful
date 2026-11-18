@@ -310,8 +310,7 @@ function setupFor(project: Project, name: string): Setup {
 function unknownSkill(project: Project, line: number, name: string, context: string): never {
   throw new ModError(project.modPath, line, 1, `unknown skill ${name} ${context}`, "Use an exact skill name provided by the declared source or selected by this project.");
 }
-function resolveEntries(project: Project, options: ResolveOptions) {
-  const overrides = options.overrides ?? {};
+export function resolveSkills(project: Project, overrides: Record<string, string>, extras: ExtraRoot[] = []) {
   const declared = new Set(project.mod.requires.map((requirement) => requirement.name));
   for (const name of Object.keys(overrides)) if (!declared.has(name)) fail(`override ${name} is not declared in skill.mod`, `Add a matching require or remove --override ${name}=PATH.`);
   const canonicalRoot = resolveProjectPath(project, project.mod.roots.skills, "directory");
@@ -324,13 +323,18 @@ function resolveEntries(project: Project, options: ResolveOptions) {
     }
     for (const name of names) skills.push({ name, origin: requirement.name, root: root.path, sourceKind: root.kind });
   }
-  for (const extra of options.extraRoots?.skills ?? []) {
+  for (const extra of extras) {
     if (!extra.origin) fail("extra skill root is missing an origin", "Give every extra root a stable provenance name.");
     const root = resolveOverride(extra.path, project, `extra skill root ${extra.origin}`);
     for (const name of sortedDirectoryNames(root)) skills.push({ name, origin: extra.origin, root, sourceKind: "extra" });
   }
   for (const entry of skills) if (!existsSync(join(entry.root, entry.name, "SKILL.md"))) fail(`skill ${entry.name} from ${entry.origin} has no SKILL.md`, `Add ${join(entry.root, entry.name, "SKILL.md")} or exclude the skill.`);
   uniqueByName(skills, "skill");
+  return skills;
+}
+
+function resolveEntries(project: Project, options: ResolveOptions) {
+  const skills = resolveSkills(project, options.overrides ?? {}, options.extraRoots?.skills);
   const setup = options.setup ? setupFor(project, options.setup) : undefined;
   const knownSkills = new Set(skills.map((entry) => entry.name));
   const mod = project.mod;

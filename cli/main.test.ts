@@ -195,6 +195,111 @@ setup work-mac (
     expect(readFileSync(mod, "utf8")).toContain("omit-command a");
   });
 
+  test("migrate rewrites skill.mod in place without changing delivered files or skill.lock", () => {
+    const root = temp();
+    const project = join(root, "agent");
+    expect(run(root, "init", "--dir", project).exitCode).toBe(0);
+    writeFileSync(join(project, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example guidance\n---\n\nLocal body\n");
+    for (const name of ["external", "unused"]) {
+      const dir = join(project, "vendor", name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} guidance\n---\n\nBody\n`);
+    }
+    const mod = join(project, "skill.mod");
+    writeFileSync(mod, `// Header
+skillful 1
+
+require path:./vendor as vendor (
+  // Selected from vendor
+  only external
+)
+
+harness claude (
+  omit-skill external "Only for Pi."
+)
+harness pi (
+)
+setup laptop (
+  omit-skill external "Not needed on laptop."
+  pi claude
+)
+`);
+    const lock = join(project, "skill.lock");
+    const originalLock = "\n";
+    writeFileSync(lock, originalLock);
+    for (const setup of [[], ["laptop"]]) {
+      const result = run(project, "render", ...setup, "--out", join(root, `before-${setup.join()}`));
+      expect(output(result).stderr).toBe("");
+      expect(result.exitCode).toBe(0);
+    }
+    const migrated = run(root, "migrate", "--project", project);
+    expect(output(migrated).stderr).toBe("");
+    expect(migrated.exitCode).toBe(0);
+    const text = readFileSync(mod, "utf8");
+    expect(text).toStartWith("// Header\nskillful 2\n");
+    expect(text).toContain("use path:./vendor { external }");
+    expect(text).toContain("// Selected from vendor");
+    expect(readFileSync(lock, "utf8")).toBe(originalLock);
+    expect(run(project, "fmt", "--check").exitCode).toBe(0);
+    expect(run(project, "migrate").exitCode).toBe(0);
+    expect(readFileSync(mod, "utf8")).toBe(text);
+    for (const setup of [[], ["laptop"]]) {
+      const after = join(root, `after-${setup.join()}`);
+      const result = run(project, "render", ...setup, "--out", after);
+      expect(output(result).stderr).toBe("");
+      expect(result.exitCode).toBe(0);
+      const before = join(root, `before-${setup.join()}`);
+      const diff = Bun.spawnSync(["diff", "-r", "-x", ".skillful", before, after]);
+      expect(output(diff).stdout).toBe("");
+      expect(diff.exitCode).toBe(0);
+    }
+  });
+
+  test.each(["all", "exclude", "split"])("migrate preserves dependency selections: %s", (selection) => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    writeFileSync(join(root, "skills", "example", "SKILL.md"), "Example body.\n");
+    for (const name of ["one", "two"]) {
+      const dir = join(root, "vendor", name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), `${name} body.\n`);
+    }
+    const requires = selection === "split"
+      ? "require path:./vendor as first (\n  only one\n)\nrequire path:./vendor as second (\n  only two\n)\n"
+      : `require path:./vendor as vendor${selection === "exclude" ? " (\n  exclude two\n)" : ""}\n`;
+    writeFileSync(join(root, "skill.mod"), `skillful 1\nharness pi (\n)\n${requires}`);
+    const skills = () => {
+      const result = run(root, "manifest", "--format", "json");
+      expect(result.exitCode, output(result).stderr).toBe(0);
+      return JSON.parse(output(result).stdout).harnesses.pi.skills.map(({ name, body }: { name: string; body: string }) => [name, body]);
+    };
+    const before = skills();
+    const migrated = run(root, "migrate");
+    expect(migrated.exitCode, output(migrated).stderr).toBe(0);
+    expect(skills()).toEqual(before);
+  });
+
+  test("migrate leaves a renderable project when a harness omits a retired skill", () => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    writeFileSync(join(root, "skills", "example", "SKILL.md"), "Example body.\n");
+    writeFileSync(join(root, "skill.mod"), 'skillful 1\nharness pi (\n  omit-skill retired "Removed upstream"\n)\n');
+    expect(run(root, "render", "--dry-run").exitCode).toBe(0);
+    expect(run(root, "migrate").exitCode).toBe(0);
+    const result = run(root, "render", "--dry-run");
+    expect(result.exitCode, output(result).stderr).toBe(0);
+  });
+  test("migrate leaves a manifest alone when it cannot translate a render setting", () => {
+    const project = temp();
+    const mod = join(project, "skill.mod");
+    const original = 'skillful 1\nharness pi (\n  token tool "run"\n)\n';
+    writeFileSync(mod, original);
+    const result = run(project, "migrate");
+    expect(result.exitCode).toBe(1);
+    expect(output(result).stderr).toContain("cannot migrate tokens for pi");
+    expect(readFileSync(mod, "utf8")).toBe(original);
+  });
+
   test("fmt canonicalizes skillful 2 without changing its version or losing the description line", () => {
     const root = temp();
     const mod = join(root, "skill.mod");

@@ -505,4 +505,60 @@ export function formatMod(mod: SkillMod): string {
   return `${lines.join("\n")}\n`;
 }
 
+export function migrateMod(mod: SkillMod, filename: string, resolveSkills: () => { name: string; origin: string; sourceKind: string }[]) {
+  if (mod.version === 2) return undefined;
+  const unsupported = (feature: string): never => fail(filename, 1, 1, `cannot migrate ${feature} without changing the render`, "Keep using skillful 1, or replace this setting with a skillful 2 equivalent before migrating.");
+  const ids = HARNESS_IDS.filter((id) => mod.harnesses[id] !== undefined);
+  for (const harness of Object.values(mod.harnesses)) if (Object.keys(harness.tokens).length) unsupported(`tokens for ${harness.id}`);
+  const skills = resolveSkills();
+  const known = new Set(skills.map(({ name }) => name));
+  const requires = new Map<string, Require>();
+  for (const requirement of mod.requires) {
+    const selectors = skills.filter(({ origin, sourceKind }) => sourceKind !== "canonical" && origin === requirement.name).map(({ name }) => name);
+    if (!selectors.length) continue;
+    const prior = requires.get(requirement.ref);
+    if (prior) { prior.selectors.push(...selectors); prior.comments.push(...requirement.comments); }
+    else requires.set(requirement.ref, { ...requirement, selectors, comments: [...requirement.comments] });
+  }
+  const skips: Skip[] = [];
+  const agentComments: Comments = [];
+  for (const harness of Object.values(mod.harnesses)) {
+    agentComments.push(...harness.comments);
+    for (const { kind, selector, reason, comments } of harness.omissions) {
+      if (kind === "omit-command") unsupported(`omit-command ${selector} for ${harness.id}`);
+      if (!known.has(selector)) continue;
+      const skip = skips.find((entry) => entry.skills[0] === selector && entry.reason === reason);
+      if (skip) { skip.agents.push(harness.id); skip.comments.push(...comments); }
+      else skips.push({ skills: [selector], agents: [harness.id], reason, comments: [...comments], line: 1 });
+    }
+  }
+  const warnings: string[] = [];
+  const setups = Object.fromEntries(Object.values(mod.setups).map((setup) => {
+    if (setup.root !== "home") unsupported(`project root for setup ${setup.name}`);
+    if (setup.mode === "only") unsupported(`only-skill in setup ${setup.name}`);
+    if (setup.harnesses.length !== ids.length || setup.harnesses.some(({ id }) => !ids.includes(id))) unsupported(`the distinct agent list for setup ${setup.name}`);
+    const comments = [...setup.comments];
+    for (const { name, reason, comments: selectorComments } of setup.selectors) {
+      comments.push(...selectorComments, `// ${JSON.stringify(name)}: ${JSON.stringify(reason)}`);
+    }
+    for (const { id, paths } of setup.harnesses) {
+      for (const [kind, path] of Object.entries(paths)) {
+        const setting = `${setup.name}: ${id} ${kind} ${JSON.stringify(path)}`;
+        warnings.push(`skillful 2 cannot carry this install path override: ${setting}`);
+        comments.push(`// Previous install path override: ${setting}`);
+      }
+    }
+    return [setup.name, { ...setup, comments, selectors: setup.selectors.filter(({ name }) => known.has(name)) }];
+  }));
+  const next: SkillMod2 = { ...mod, version: 2, requires: [...requires.values()], agents: { ids, comments: agentComments }, skips, setups, descriptions: [], trailingComments: [] };
+  const emitted = formatMod2(next).split("\n");
+  for (const comment of mod.leadingComments) {
+    const index = emitted.indexOf(comment);
+    if (index < 0) next.trailingComments.push(comment);
+    else emitted.splice(index, 1);
+  }
+  const text = formatMod2(next);
+  return { text, mod: parseMod(text, filename), warnings };
+}
+
 export function formatText(text: string, filename = "skill.mod") { return formatMod(parseMod(text, filename)); }

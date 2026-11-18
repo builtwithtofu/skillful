@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { readFileSync, writeFileSync } from "node:fs";
 import { Argument, Command, CommanderError, Option } from "commander";
-import { addDependency, fetchDependencies, updateDependencies } from "./deps.ts";
+import { resolveSkills } from "./contract.ts";
+import { addDependency, cachedDependencyPaths, fetchDependencies, updateDependencies } from "./deps.ts";
 import { normalizeHarness } from "./harness.ts";
 import {
   ADD_AFTER_HELP,
@@ -12,6 +13,7 @@ import {
   INIT_AFTER_HELP,
   INSPECT_AFTER_HELP,
   INSTALL_AFTER_HELP,
+  MIGRATE_AFTER_HELP,
   RENDER_AFTER_HELP,
   ROOT_AFTER_HELP,
   SETUP_AFTER_HELP,
@@ -20,7 +22,8 @@ import {
 } from "./help.ts";
 import { installProject, installSetup, removeSetup, type InstallPaths } from "./install.ts";
 import { checkCommand, diffCommand, inspectCommand, listCommand, manifestCommand, schemaCommand, setupShowCommand, type OutputFormat } from "./introspect.ts";
-import { formatText, type HarnessId } from "./mod.ts";
+import { readLock, validateLock } from "./lock.ts";
+import { formatText, migrateMod, type HarnessId } from "./mod.ts";
 import { discoverProject, initProject } from "./project.ts";
 import { renderProject } from "./render.ts";
 import { renderSkillTopic, resolveSkillTopic, skillTree } from "./skills.ts";
@@ -157,6 +160,21 @@ export function createProgram() {
       if (options.check) { console.error(`Error: ${resolved.modPath} is not canonical\n--- current\n+++ formatted\nRecovery: Run \`skillful fmt --project ${resolved.root}\` to rewrite it.`); process.exitCode = 1; return; }
       writeFileSync(resolved.modPath, formatted);
       console.log(`Formatted ${resolved.modPath}`);
+    });
+
+  program.command("migrate")
+    .summary("Rewrite skill.mod from skillful 1 to skillful 2")
+    .description("Rewrite skill.mod in place without changing skill.lock or installing anything.")
+    .addHelpText("after", MIGRATE_AFTER_HELP)
+    .addOption(new Option("--project <directory>", "project directory").argParser(collect))
+    .action((options: { project?: string[] }) => {
+      const project = discoverProject({ project: one(options.project, "--project") });
+      const migrated = migrateMod(project.mod, project.modPath, () => resolveSkills(project, cachedDependencyPaths(project)));
+      if (!migrated) { console.log(`${project.modPath} is already skillful 2`); return; }
+      validateLock(migrated.mod, readLock(project.root, false));
+      writeFileSync(project.modPath, migrated.text);
+      for (const warning of migrated.warnings) console.error(`Warning: ${warning}`);
+      console.log(`Migrated ${project.modPath} to skillful 2`);
     });
 
   program.command("add")
