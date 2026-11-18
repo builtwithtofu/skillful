@@ -99,10 +99,12 @@ skillful update angular-skills
 skillful --version
 ```
 
-`nix build` is the complete render. Each harness view is a path inside it.
-`project.forSetup` evaluates the named declaration directly from `skill.mod`, then
-builds only that setup through the same renderer. Its destination-keyed `files`
-map is ordinary Nix data; evaluation never runs the CLI or reads a derivation.
+`project.rendered` is the complete render. `project.forHarness` builds a
+standalone harness view. `project.forSetup` evaluates the declaration from
+`skill.mod` and builds the same destination layout as `skillful install`,
+including the shared skills folder. Consume its destination-keyed `files` map
+for deployment; `rendered` is the setup's build tree, not a destination map.
+Evaluation never runs the CLI or reads a derivation.
 Lock writes go through the Skillful CLI on your PATH.
 `nix flake update` does not move skill pins.
 

@@ -145,7 +145,7 @@ let
     ++ lib.concatMap (entry: [ "--extra-command-root" "${entry.origin}=${toString entry.source}" ]) normalizedExtraRoots.commands;
   projectArgs = [ "--project" (toString checkedProjectRoot) "--source-root" (toString projectSource) ] ++ overrideArgs ++ extraArgs;
   escapedProjectArgs = lib.escapeShellArgs projectArgs;
-  renderTree = derivationName: renderArgs: pkgs.runCommand derivationName {
+  buildTree = derivationName: script: pkgs.runCommand derivationName {
     nativeBuildInputs = [ engineCli ];
     projectSource = toString projectSource;
     projectRoot = toString checkedProjectRoot;
@@ -156,7 +156,11 @@ let
     export XDG_CACHE_HOME="$TMPDIR/cache"
     export XDG_STATE_HOME="$TMPDIR/state"
     mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
-    skillful render ${lib.escapeShellArgs renderArgs} --project "$projectRoot" --source-root "$projectSource" --out "$TMPDIR/rendered" ${lib.escapeShellArgs (overrideArgs ++ extraArgs)}
+    ${script}
+  '';
+  sourceArgs = ''--project "$projectRoot" --source-root "$projectSource" ${lib.escapeShellArgs (overrideArgs ++ extraArgs)}'';
+  renderTree = derivationName: renderArgs: buildTree derivationName ''
+    skillful render ${lib.escapeShellArgs renderArgs} ${sourceArgs} --out "$TMPDIR/rendered"
     cp -r "$TMPDIR/rendered" "$out"
   '';
   rendered = renderTree "skillful-project-render" [ ];
@@ -164,10 +168,19 @@ let
     if !(builtins.hasAttr name facts)
     then throw "unknown skillful harness ${name}; known: ${lib.concatStringsSep ", " knownHarnesses}"
     else
-      let harnessRendered = renderTree "skillful-${name}-render" [ "--harness" name ];
+      let
+        harnessRendered = renderTree "skillful-${name}-render" [ "--harness" name ];
+        privateSkills = if name == "pi" then ".pi/agent/skills" else ".${name}/skills";
+        deliveredSkills = buildTree "skillful-${name}-skills" ''
+          mkdir -p "$out"
+          for skills in ${harnessRendered}/{${name}/skills,${privateSkills},.agents/skills}; do
+            if [ -d "$skills" ]; then cp -r "$skills/." "$out/"; fi
+          done
+        '';
       in {
-        paths = facts.${name}.installPaths.home;
-        skills = "${harnessRendered}/${name}/skills";
+        paths = facts.${name}.installPaths.home
+          // lib.optionalAttrs (manifest.version == 2 && name == "codex") { skills = ".codex/skills"; };
+        skills = if manifest.version == 1 then "${harnessRendered}/${name}/skills" else deliveredSkills;
         commands = "${harnessRendered}/${name}/commands";
         rules = "${harnessRendered}/${name}/rules.md";
       };
@@ -177,20 +190,39 @@ let
     else
       let
         setup = setupDeclarations.${name};
+        shareSkills = manifest.version == 2 && builtins.any (harness: harness.name != "claude") setup.harnesses;
         resolvedHarnesses = map (harness:
           if facts.${harness.name}.commandMerge == "skill" && harness.paths ? commands
           then throw "skillful setup ${name} harness ${harness.name} does not support a commands path"
           else harness // {
-            paths = facts.${harness.name}.installPaths.${setup.root} // harness.paths;
+            paths = facts.${harness.name}.installPaths.${setup.root}
+              // lib.optionalAttrs (manifest.version == 2 && harness.name == "codex") { skills = ".codex/skills"; }
+              // harness.paths;
           }
         ) setup.harnesses;
         setupRendered = renderTree "skillful-setup-${name}-render" [ name ];
+        deployed = buildTree "skillful-setup-${name}-files" ''
+          mkdir "$TMPDIR/destination"
+          skillful install ${lib.escapeShellArg name} ${sourceArgs} --root "$TMPDIR/destination"
+          ${lib.concatMapStringsSep "\n" (entry: lib.optionalString entry.recursive ''
+            mkdir -p "$TMPDIR/destination/"${lib.escapeShellArg entry.destination}
+          '') entries}
+          cp -r "$TMPDIR/destination" "$out"
+        '';
         entries = lib.concatMap (harness: lib.mapAttrsToList (category: destination: {
           inherit category destination;
           harness = harness.name;
           recursive = category != "rules";
-          source = "${setupRendered}/${harness.name}/${if category == "rules" then "rules.md" else category}";
-        }) harness.paths) resolvedHarnesses;
+          source = if manifest.version == 1
+            then "${setupRendered}/${harness.name}/${if category == "rules" then "rules.md" else category}"
+            else "${deployed}/${destination}";
+        }) harness.paths) resolvedHarnesses ++ lib.optional shareSkills {
+          category = "skills";
+          destination = ".agents/skills";
+          harness = null;
+          recursive = true;
+          source = "${deployed}/.agents/skills";
+        };
         destinations = map (entry: entry.destination) entries;
         duplicateDestinations = builtins.length destinations != builtins.length (lib.unique destinations);
         overlappingDestinations = builtins.any (left: builtins.any (right:
@@ -204,7 +236,7 @@ let
           name = harness.name;
           value = {
             paths = harness.paths;
-            skills = "${setupRendered}/${harness.name}/skills";
+            skills = if manifest.version == 1 then "${setupRendered}/${harness.name}/skills" else "${deployed}/${harness.paths.skills}";
             commands = "${setupRendered}/${harness.name}/commands";
             rules = "${setupRendered}/${harness.name}/rules.md";
           };

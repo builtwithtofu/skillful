@@ -119,9 +119,11 @@ Examples:
 
 export const RENDER_AFTER_HELP = `
 By default, render uses the agents in skillful 2 or the declared harnesses in
-skillful 1. Name a machine or setup to apply its skill selection. --harness
-updates only the named outputs and preserves other managed renders. Only install
-writes live harness destinations.
+skillful 1. Name a machine or setup to apply its skill selection. In skillful 2,
+identical skills share .agents/skills; Claude Code uses .claude/skills. A --harness
+render can regroup other already-rendered agents' skills and refresh their skill
+contracts, without touching their commands or rules. Only install writes live
+harness destinations.
 
 Examples:
   skillful render --dry-run
@@ -136,8 +138,12 @@ export const INSTALL_AFTER_HELP = `
 The only command that writes live harness destinations. Records exclusive
 ownership, refuses unmanaged or edited collisions, and removes only unchanged
 stale files. Named setups select home or project paths from their declared root.
-One-off --harness installs always use home paths; --root only relocates them. Use
---path for a nonstandard layout. --remove retires a named setup from its receipt;
+In skillful 2, named machine installs share identical skills in .agents/skills.
+Differing skills, Claude Code's skills, and one-off --harness installs use
+separate folders. Use --root to relocate and --path for a nonstandard layout.
+A one-off install refuses to duplicate a skill owned in the shared folder; rerun
+its machine install to switch layouts.
+--remove retires a named setup from its receipt;
 pass --root after deleting its declaration. Valid source overrides are ignored
 during removal because destination ownership comes only from the receipt. Removal
 rejects --force because changed owned files always block. An OpenCode install at

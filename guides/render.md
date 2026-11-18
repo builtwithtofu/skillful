@@ -2,8 +2,15 @@
 
 Render a managed build tree. By default, render uses the agents in skillful 2 or
 the declared harnesses in skillful 1. Name a machine or setup to apply its skill
-selection. `--harness` updates only the named outputs and preserves other managed
-renders. Only `install` writes live harness destinations. `--dry-run` first.
+selection. In skillful 2, identical skills for Codex, Grok, Pi, OpenCode and
+Cursor share `.agents/skills`. If a skill differs or is skipped, only the agents
+that use it get their own copies. Claude Code uses `.claude/skills`. Skillful 1
+continues to render skills in `<harness>/skills`.
+
+`--harness` refreshes the named outputs. In skillful 2 it can also regroup the
+skills of already-rendered shared-folder agents and refresh their skill contracts,
+without touching commands or rules. Only `install` writes live harness destinations.
+`--dry-run` first.
 
 Not `inspect` (that does not write). Not a substitute for editing sources.
 
@@ -21,6 +28,8 @@ independent. `--path` installs one public harness into a nonstandard layout. An
 OpenCode install at retired `opencode-v2` paths adopts that receipt and migrates
 unchanged stale files. `--force` never permits an escape, takes files through
 another path, receipt, or symlink alias, or deletes a changed stale file.
+A one-off skillful 2 install refuses to duplicate an owned shared skill. Rerun
+the machine install to switch layouts.
 `install <setup> --remove` rejects `--force` and retires only unchanged files
 from that setup's receipt. A named render contains only that setup's selected
 skills and harness outputs.
