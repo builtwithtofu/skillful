@@ -50,7 +50,8 @@ Next:
 export const FMT_AFTER_HELP = `
 Use --check in CI or before a review. Omit it to rewrite skill.mod in place.
 Both skillful 1 and skillful 2 keep their existing version.
-See skillful skills show mod for skillful 2 front-matter and body overrides.
+In skillful 2, fmt writes multiline values as triple-quoted blocks when possible.
+See skillful skills show mod for front-matter and body override examples.
 
 Examples:
   skillful fmt --check

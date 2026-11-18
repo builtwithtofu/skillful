@@ -29,6 +29,62 @@ harness pi (
 `;
 
 describe("skill.mod", () => {
+  test("formats multiline operands without changing literal whitespace or escapes", () => {
+    const text = String.raw`skillful 2
+
+
+example.body.replace """
+  Before.
+    Indented.
+  """ with """
+
+  // literal \n
+
+  """
+example.description = "One line"
+
+skip example on pi """
+  First reason.
+  Second reason.
+  """
+`;
+    const escaped = String.raw`skillful 2
+example.body.replace "Before.\n  Indented." with "\n// literal \\n\n"
+example.description = """
+  One line
+  """
+skip example on pi "First reason.\nSecond reason."
+`;
+    expect(formatText(escaped)).toBe(text);
+    expect(formatText(text)).toBe(text);
+    const mod = parseMod(text);
+    expect(mod).toMatchObject({
+      fieldOverrides: [{ match: { text: "Before.\n  Indented." }, value: { text: "\n// literal \\n\n" } }, { value: { text: "One line" } }],
+      skips: [{ reason: "First reason.\nSecond reason." }],
+    });
+  });
+
+  test.each(["line\n  \"\"\"", "line\r\nnext"])("keeps JSON when a raw block cannot encode %j", (value) => {
+    const text = `skillful 2\n\n\nexample.body = ${JSON.stringify(value)}\n`;
+    expect(formatText(text)).toBe(text);
+  });
+
+  test.each([
+    ['example.body = """ extra', "custom.mod:2:16: block opener must end its line"],
+    ['example.body = """\n text\n  """', "custom.mod:3:1: block content does not match closing delimiter indentation"],
+    ['example.body.replace """\n  old\n  """ with """\n  new', "custom.mod:4:12: unterminated block value"],
+  ])("reports the physical location of an invalid block", (directive, error) => {
+    expect(() => parseMod(`skillful 2\n${directive}`, "custom.mod")).toThrow(error);
+  });
+
+  test("body.replace errors explain multiline operand syntax", () => {
+    expect(() => parseMod('skillful 2\nexample.body.replace "old" with')).toThrow(expect.objectContaining({
+      recovery: expect.stringContaining('For a multiline operand, use a """ block.'),
+    }));
+    expect(() => parseMod('skillful 2\nexample.body.replace """\nold')).toThrow(expect.objectContaining({
+      recovery: expect.stringContaining('Start a closing """ at the beginning of a line; the rest of the directive can follow it.'),
+    }));
+  });
   test.each([
     ["set", "example.body = ./override.md", "Pi only.\n", "Elsewhere.\n"],
     ["append", "example.body.append = ./override.md", "Before.\nPi only.\n", "Before.\nElsewhere.\n"],

@@ -633,6 +633,31 @@ angular-developer.when_to_use = "On Angular projects"
     expect(result.exitCode, output(result).stderr).toBe(0);
     expect(JSON.parse(output(result).stdout).harnesses.pi.skills.find(({ name }: { name: string }) => name === "example").body.replaceAll("\r\n", "\n")).toBe(expected);
   });
+  test("renders comment fences in a triple-quoted override per agent", () => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    writeFileSync(join(root, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example\n---\n\nOld paragraph.\nSecond line.\n");
+    writeFileSync(join(root, "skill.mod"), `skillful 2
+agents pi claude
+example.body.replace """
+  Old paragraph.
+  Second line.
+  """ with """
+  <!-- only pi -->
+  Pi instructions.
+  <!-- end -->
+  <!-- only claude -->
+  Claude instructions.
+  <!-- end -->
+  """
+`);
+    const result = run(root, "manifest", "--format", "json");
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    const { harnesses } = JSON.parse(output(result).stdout);
+    const header = "---\nname: example\ndescription: Example\n---\n\n";
+    expect(harnesses.pi.skills[0].body).toBe(`${header}Pi instructions.\n`);
+    expect(harnesses.claude.skills[0].body).toBe(`${header}Claude instructions.\n`);
+  });
   test("check reports drift only for replaced upstream fields, including after updating", () => {
     const root = temp();
     expect(run(root, "init").exitCode).toBe(0);
