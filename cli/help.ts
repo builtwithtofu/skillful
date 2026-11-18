@@ -142,6 +142,8 @@ The only command that writes live harness destinations. Records exclusive
 ownership, refuses unmanaged or edited collisions, and removes only unchanged
 stale files. Named setups select home or project paths from their declared root.
 Skillful 2 selects the machine matching your short hostname unless you name one.
+Use only <skills> on <agents> "reason" in skill.mod to restrict who gets a skill.
+See skillful skills show mod for the manifest syntax.
 Machine installs share identical skills in .agents/skills; differing skills and
 Claude Code's skills use separate folders. Use --root to relocate. Only skillful 1
 supports one-off --harness installs and their --path overrides.
