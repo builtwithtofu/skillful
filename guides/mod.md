@@ -14,8 +14,10 @@ merges duplicate pins at the same revision, and removes unused pins. Run
 than guessing at settings with no direct translation, such as custom tokens or
 setups with different agent lists. If it cannot find an omitted skill, declare
 its source or remove the omission if the skill is retired.
-Install path overrides are preserved as comments and reported as warnings; they
-no longer apply. Run `skillful render` afterward to verify the delivered files.
+Setup install path overrides become `harness` paths inside the corresponding
+`machine`, except that `.agents/skills` overrides for agents that read the shared
+folder use shared placement instead. Run `skillful render <machine>` afterward
+to verify the delivered files.
 
 ```text
 skillful 2
@@ -43,6 +45,31 @@ agents without adding them to the machine. Multiple `only` lines for the same
 skill combine their agent lists; `skip` still excludes a skill.
 Unknown directives, agents, or skill names are errors with a line number; skill
 names are checked when resolving sources (`check` or `render`), not during `fmt`.
+
+Use `harness` to change install paths, or define an agent and list it in `agents`:
+
+```text
+agents claude pi local-agent
+harness pi { rules .pi/agent/GENERAL.md }
+harness local-agent {
+  skills .local-agent/skills
+  commands .local-agent/commands
+  rules .local-agent/RULES.md
+  reads-shared
+}
+machine laptop
+machine work-mac {
+  harness pi { rules .pi/agent/WORK.md }
+  skip angular-new-app
+}
+```
+
+Paths are relative to the install root (your home by default). A machine's
+fields win over top-level fields; unset fields keep their defaults. A new agent
+needs a `skills` path. Set `commands` to install separate command files;
+otherwise an agent without a command destination gets commands as skills.
+`reads-shared` opts an agent into `.agents/skills`. Claude Code defaults to
+`~/.claude/CLAUDE.md`; Cursor has no default rules path.
 Replace a skill's front-matter field with `<skill>.<field> = "…"`, or add text
 with `<skill>.<field>.append = "…"`. Use an unquoted project-relative file path
 instead of a quoted string to read the value from a file. For one agent, put

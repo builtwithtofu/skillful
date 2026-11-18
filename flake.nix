@@ -254,6 +254,10 @@
               test -f ${(machineFixture.forHarness "claude").skills}/local/SKILL.md
               test ! -e ${(machineFixture.forHarness "claude").skills}/angular-developer
               test ! -e ${travelSetup.rendered}/.claude/skills/desk-only
+              test -f ${deskSetup.harnesses.local-agent.skills}/local/SKILL.md
+              test -f ${deskSetup.files.".pi/agent/DESK.md".source}
+              test -f ${travelSetup.files.".pi/agent/GENERAL.md".source}
+              test -f ${deskSetup.files.".claude/CLAUDE.md".source}
 
               for project in ${./tests/fixtures/setup-mod/unsafe} ${./tests/fixtures/setup-mod/mixed} ${./tests/fixtures/setup-mod/root-home}; do
                 if skillful fmt --check --project "$project"; then exit 1; fi

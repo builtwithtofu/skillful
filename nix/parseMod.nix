@@ -156,6 +156,19 @@ let
       let
         added = lib.foldl' (innerState: name: addHarness line innerState name) state tokens;
       in added;
+  bare = token: word: !token.quoted && token.value == word;
+  pathToken = token: token.value != "" && (token.quoted || !(builtins.elem token.value [ "{" "}" "=" ]));
+  readHarness = line: entry: tokens:
+    if tokens == [ ] then entry else
+    let
+      key = builtins.head tokens;
+      rest = builtins.tail tokens;
+      operand = builtins.head rest;
+    in if bare key "}" && rest == [ ] then entry // { closed = true; }
+    else if bare key "reads-shared" && !entry.readsShared then readHarness line (entry // { readsShared = true; }) rest
+    else if key.quoted || !(builtins.elem key.value [ "skills" "commands" "rules" ]) || rest == [ ] || !pathToken operand || builtins.hasAttr key.value entry.paths
+    then fail line "invalid harness field"
+    else readHarness line (entry // { paths = entry.paths // { ${key.value} = normalizePath line operand.value; }; }) (builtins.tail rest);
   stepV2 = state: entry:
     let
       line = entry.index + 1;
@@ -163,35 +176,51 @@ let
       directive = builtins.head tokens;
       args = builtins.tail tokens;
       values = map (token: token.value) args;
-    in if tokens == [ ] || directive.quoted then state
-    else if directive.value == "agents" then
+      machine = if state.machine == null then null else state.setups.${state.machine};
+      updateMachine = changes: state // { setups = state.setups // { ${state.machine} = machine // changes; }; };
+      storeHarness = harness:
+        if !harness.closed then state // { inner = harness; } else
+        let
+          declarations = if machine == null then state.declarations else machine.declarations;
+          updated = declarations // { ${harness.name} = harness; };
+        in (if machine == null then state // { declarations = updated; } else updateMachine { declarations = updated; }) // { inner = null; };
+      addSkips = selection: skills: {
+        mode = if skills == [ ] then selection.mode else "omit";
+        skills = selection.skills ++ map (token: { name = token.value; }) skills;
+      };
+    in if tokens == [ ] then state
+    else if state.inner != null then storeHarness (readHarness line state.inner tokens)
+    else if bare directive "harness" then
+      let
+        name = requireName line "harness" (if args == [ ] then "" else builtins.head values);
+        declarations = if machine == null then state.declarations else machine.declarations;
+      in if builtins.length args < 2 || !bare (builtins.elemAt args 1) "{" || (builtins.head args).quoted || name == "opencode-v2"
+      then fail line "expected harness <agent> {"
+      else if builtins.hasAttr name declarations then fail line "duplicate harness ${name}"
+      else storeHarness (readHarness line { inherit name; paths = { }; readsShared = false; closed = false; } (lib.drop 2 args))
+    else if machine != null then
+      if bare directive "}" && args == [ ] && machine.declarations != { } then state // { machine = null; }
+      else if bare directive "skip" && args != [ ] && builtins.all pathToken args then updateMachine { selection = addSkips machine.selection args; }
+      else fail line "invalid machine block entry"
+    else if bare directive "agents" then
       if state.agents != null then fail line "agents may appear at most once"
       else if values == [ ] then fail line "agents must list at least one agent"
-      else state // {
-        agents = map (name:
-          if builtins.hasAttr name facts then { inherit name; paths = { }; }
-          else fail line "unknown agent ${builtins.toJSON name}"
-        ) (lib.unique values);
-      }
-    else if directive.value == "machine" then
+      else state // { agents = lib.unique values; }
+    else if bare directive "machine" then
       let
         name = requireName line "machine" (if args == [ ] then "" else builtins.head values);
-        skip = builtins.elemAt args 1;
+        second = builtins.elemAt args 1;
+        block = builtins.length args == 2 && bare second "{";
         skills = lib.drop 2 args;
       in if builtins.hasAttr name state.setups then fail line "duplicate machine ${name}"
-      else if builtins.length args > 1 && (skip.quoted || skip.value != "skip" || skills == [ ]
-        || builtins.any (token: token.value == "" || (!token.quoted && builtins.elem token.value [ "{" "}" "=" ])) skills)
-      then fail line "machine must be: machine <name> [skip <skills>]"
-      else state // { setups = state.setups // {
-        ${name} = {
-          inherit name;
-          root = "home";
-          selection = {
-            mode = if skills == [ ] then "all" else "omit";
-            skills = map (token: { name = token.value; }) skills;
-          };
+      else if !block && builtins.length args > 1 && (!bare second "skip" || skills == [ ] || !builtins.all pathToken skills)
+      then fail line "machine must be: machine <name> [skip <skills>] or machine <name> {"
+      else state // {
+        machine = if block then name else null;
+        setups = state.setups // {
+          ${name} = { inherit name; root = "home"; declarations = { }; selection = addSkips { mode = "all"; skills = [ ]; } skills; };
         };
-      }; }
+      }
     else state;
   entries = lib.imap0 (index: value: { inherit index value; }) (lib.splitString "\n" text);
   header = lib.findFirst (entry: tokenize false (entry.index + 1) entry.value != [ ]) { index = 0; value = ""; } entries;
@@ -203,12 +232,28 @@ let
     else fail (header.index + 1) "first semantic directive must be: skillful 1 or skillful 2";
   body = lib.drop (header.index + 1) entries;
   parsedV1 = lib.foldl' step { setups = { }; current = null; inner = null; } body;
-  parsedV2 = lib.foldl' stepV2 { setups = { }; agents = null; } body;
+  v2 = lib.foldl' stepV2 { setups = { }; agents = null; declarations = { }; machine = null; inner = null; } body;
+  parsedV2 = if v2.inner != null || v2.machine != null then fail (builtins.length entries) "unclosed machine or harness block" else v2;
+  resolveAgent = declarations: name:
+    let
+      builtin = facts.${name} or null;
+      global = parsedV2.declarations.${name} or null;
+      local = declarations.${name} or null;
+    in if builtin == null && global == null && local == null then throw "unknown agent ${builtins.toJSON name}"
+    else {
+      inherit name;
+      paths = (if builtin == null then { } else builtin.installPaths.home)
+        // lib.optionalAttrs (name == "codex") { skills = ".codex/skills"; }
+        // lib.optionalAttrs (name == "claude") { rules = ".claude/CLAUDE.md"; }
+        // (global.paths or { }) // (local.paths or { });
+      readsShared = (builtin != null && name != "claude") || (global.readsShared or false) || (local.readsShared or false);
+    };
 in
 {
   inherit version;
+  homeHarnessPaths = if version == 2 then lib.genAttrs knownHarnesses (name: (resolveAgent { } name).paths) else { };
   setups = if version == 2 then builtins.mapAttrs (name: setup: setup // {
-    harnesses = if parsedV2.agents == null then throw "skillful machine ${name} selects no agents" else parsedV2.agents;
+    harnesses = if parsedV2.agents == null then throw "skillful machine ${name} selects no agents" else map (resolveAgent setup.declarations) parsedV2.agents;
   }) parsedV2.setups
   else if parsedV1.inner != null then fail parsedV1.current.line "unclosed setup harness block"
   else if parsedV1.current != null then fail parsedV1.current.line "unclosed setup block"

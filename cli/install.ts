@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { harnessPlan, resolvePlan, sha256, sharedSkillsPath, type ResolveOptions } from "./contract.ts";
-import { HARNESS_IDS, type HarnessId } from "./mod.ts";
+import { HARNESS_IDS, type BuiltinHarnessId, type HarnessId } from "./mod.ts";
 import type { Project } from "./project.ts";
 import { renderProject, writeHarnessArtifacts } from "./render.ts";
 import { loadHarnesses, type HarnessFacts } from "./harness.ts";
@@ -31,7 +31,7 @@ type CommonInstallOptions = ResolveOptions & {
   stateHome?: string | undefined;
 };
 export type InstallOptions = CommonInstallOptions & {
-  harness: HarnessId;
+  harness: BuiltinHarnessId;
   paths?: Partial<InstallPaths> | undefined;
 };
 export type InstallSetupOptions = CommonInstallOptions;

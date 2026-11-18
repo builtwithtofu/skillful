@@ -48,6 +48,168 @@ describe("project CLI", () => {
     expect(readFileSync(join(home, ".claude/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
   });
 
+  test("harness paths merge by field, including for a new agent", () => {
+    const { project, home } = machineFixture();
+    const mod = join(project, "skill.mod");
+    writeFileSync(join(project, "commands", "prompt.md"), "Run the prompt.\n");
+    writeFileSync(join(project, "rules", "global_agents.md"), "House rules.\n");
+    writeFileSync(mod, `skillful 2
+agents claude cursor local-agent
+harness local-agent { skills ".local/custom skills" commands .local/prompts rules .local/GENERAL.md }
+machine desk
+machine work {
+  harness local-agent {
+    // Work instructions are different.
+    rules .local/WORK.md
+  }
+  skip example
+}
+`);
+    const formatted = run(project, "fmt");
+    expect(formatted.exitCode, output(formatted).stderr).toBe(0);
+    expect(readFileSync(mod, "utf8")).toContain("// Work instructions are different.");
+    expect(run(project, "fmt", "--check").exitCode).toBe(0);
+    const desk = runIn(project, home, "install", "desk");
+    expect(desk.exitCode, output(desk).stderr).toBe(0);
+    expect(readFileSync(join(home, ".local/custom skills/example/SKILL.md"), "utf8")).toContain("Default body.");
+    expect(readFileSync(join(home, ".local/prompts/prompt.md"), "utf8")).toContain("Run the prompt.");
+    expect(readFileSync(join(home, ".local/GENERAL.md"), "utf8")).toBe("House rules.\n");
+    expect(readFileSync(join(home, ".claude/CLAUDE.md"), "utf8")).toBe("House rules.\n");
+    expect(readFileSync(join(home, ".cursor/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
+    expect(existsSync(join(home, ".cursor/rules"))).toBe(false);
+    const workHome = temp();
+    const work = runIn(project, workHome, "install", "work");
+    expect(work.exitCode, output(work).stderr).toBe(0);
+    expect(existsSync(join(workHome, ".local/custom skills/example/SKILL.md"))).toBe(false);
+    expect(existsSync(join(workHome, ".local/GENERAL.md"))).toBe(false);
+    expect(readFileSync(join(workHome, ".local/WORK.md"), "utf8")).toBe("House rules.\n");
+    expect(readFileSync(join(workHome, ".local/prompts/prompt.md"), "utf8")).toContain("Run the prompt.");
+  });
+
+  test("a machine can define an agent that opts into shared skills", () => {
+    const { project, home } = machineFixture();
+    writeFileSync(join(project, "skill.mod"), `skillful 2
+agents pi local-agent
+machine desk {
+  harness local-agent { skills .local/skills reads-shared }
+}
+`);
+    const result = runIn(project, home, "install", "desk");
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    expect(readFileSync(join(home, ".agents/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
+    expect(existsSync(join(home, ".local/skills/example/SKILL.md"))).toBe(false);
+    expect(existsSync(join(home, ".pi/agent/skills/example/SKILL.md"))).toBe(false);
+  });
+
+  test("check accepts an agent whose skills path is declared on the machine", () => {
+    const { project } = machineFixture();
+    writeFileSync(join(project, "skill.mod"), `skillful 2
+agents pi editor
+harness editor { reads-shared }
+machine desk {
+  harness editor { skills .editor/skills }
+}
+`);
+    for (const args of [[], ["--harness", "editor"], ["--harness", "pi"]]) {
+      const result = run(project, "check", ...args);
+      expect(result.exitCode, output(result).stderr).toBe(0);
+      expect(output(result).stdout.trim()).toBe("OK");
+    }
+  });
+
+  test("render and inspect accept a declared custom harness", () => {
+    const { project } = machineFixture();
+    writeFileSync(join(project, "skill.mod"), `skillful 2
+agents pi editor
+harness editor { skills .editor/skills }
+machine desk
+`);
+    const rendered = run(project, "render", "--harness", "editor");
+    expect(rendered.exitCode, output(rendered).stderr).toBe(0);
+    expect(readFileSync(join(project, "rendered/.harness-editor/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
+    const inspected = run(project, "inspect", "example", "--harness", "editor");
+    expect(inspected.exitCode, output(inspected).stderr).toBe(0);
+    expect(output(inspected).stdout).toContain("editor: included");
+  });
+
+  test("a renderer fence selects only its declared custom harness", () => {
+    const { project, home } = machineFixture();
+    writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi editor\nharness editor { skills .editor/skills }\nmachine desk\n");
+    writeFileSync(join(project, "skills/example/SKILL.md"), "---\nname: example\ndescription: Example\n---\nDefault body.\n{{#editor}}\nEditor only.\n{{/}}\n");
+    const checked = run(project, "check", "--harness", "pi");
+    expect(checked.exitCode, output(checked).stderr).toBe(0);
+    const installed = runIn(project, home, "install", "desk");
+    expect(installed.exitCode, output(installed).stderr).toBe(0);
+    expect(readFileSync(join(home, ".editor/skills/example/SKILL.md"), "utf8")).toContain("Editor only.");
+    expect(readFileSync(join(home, ".pi/agent/skills/example/SKILL.md"), "utf8")).not.toContain("Editor only.");
+  });
+  test("migrate treats the explicit v1 Codex default as the shared destination", () => {
+    const { project, home } = machineFixture();
+    writeFileSync(join(project, "skill.mod"), `skillful 1
+harness codex (
+)
+harness pi (
+)
+setup desk (
+  pi
+  codex (
+    skills .agents/skills
+  )
+)
+`);
+    const install = () => runIn(project, home, "install", "desk");
+    expect(install().exitCode).toBe(0);
+    expect(run(project, "migrate").exitCode).toBe(0);
+    const result = install();
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    expect(existsSync(join(home, ".agents/skills/example/SKILL.md"))).toBe(true);
+    for (const root of [".pi/agent", ".codex"]) expect(existsSync(join(home, root, "skills/example/SKILL.md"))).toBe(false);
+  });
+  test("migrate treats Pi's explicit shared skills path as shared", () => {
+    const { project, home } = machineFixture();
+    writeFileSync(join(project, "skill.mod"), `skillful 1
+harness codex (
+)
+harness pi (
+)
+setup desk (
+  pi (
+    skills .agents/skills
+  )
+  codex (
+    skills .work/skills
+  )
+)
+`);
+    const install = () => runIn(project, home, "install", "desk");
+    const before = install();
+    expect(before.exitCode, output(before).stderr).toBe(0);
+    expect(existsSync(join(home, ".work/skills/example/SKILL.md"))).toBe(true);
+    expect(run(project, "migrate").exitCode).toBe(0);
+    const after = install();
+    expect(after.exitCode, output(after).stderr).toBe(0);
+    expect(existsSync(join(home, ".agents/skills/example/SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".work/skills/example/SKILL.md"))).toBe(false);
+  });
+  test("migrate keeps a machine's install path override", () => {
+    const { project, home } = machineFixture();
+    writeFileSync(join(project, "skill.mod"), `skillful 1
+harness pi (
+)
+setup desk (
+  pi (
+    skills .work/skills
+  )
+)
+`);
+    const install = () => runIn(project, home, "install", "desk");
+    expect(install().exitCode).toBe(0);
+    expect(run(project, "migrate").exitCode).toBe(0);
+    const result = install();
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    expect(output(result).stdout).toContain("0 add, 0 change, 0 delete");
+    expect(readFileSync(join(home, ".work/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
+  });
   test("install lists declared machines when the hostname does not match", () => {
     const { project, home } = machineFixture();
     const host = hostname().toLowerCase().split(".")[0];

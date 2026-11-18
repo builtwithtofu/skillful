@@ -20,8 +20,9 @@ code span or code block is shown as written, so examples of fences, tokens, and 
 need no escaping. A render error names the file and line it could not render.
 
 Harness-only lines use fences such as `{{#codex}}`, `{{#cursor}}`, `{{#grok}}`, and
-their inverted forms, closed by `{{/}}`. Tokens come from `skill.mod`. `skillful
-schema` lists harness facts and markup.
+their inverted forms, closed by `{{/}}`. Fences accept built-in harness names and
+custom names listed in `agents` in `skillful 2`. Tokens come from `skill.mod`.
+`skillful schema` lists harness facts and markup.
 
 ```bash
 skillful fmt --check

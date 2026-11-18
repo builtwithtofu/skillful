@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "
 import { join, relative, resolve } from "node:path";
 import { loadHarnesses, type HarnessFacts, type HarnessInstallPaths } from "./harness.ts";
 import { isScalar, parseDocument } from "yaml";
-import { HARNESS_IDS, mapHarnesses, ModError, type FieldOverride, type HarnessId, type Omission, type Require, type Setup } from "./mod.ts";
+import { agentReadsShared, HARNESS_IDS, mapHarnesses, ModError, type BuiltinHarnessId, type FieldOverride, type HarnessId, type Omission, type Require, type Setup, type SkillMod } from "./mod.ts";
 import { resolveProjectPath, type Project } from "./project.ts";
 import { cachedDependencyPaths } from "./deps.ts";
 import { readLock, readOverrideBaselines } from "./lock.ts";
@@ -83,7 +83,7 @@ export class ContractError extends Error {
   constructor(message: string, readonly recovery: string) { super(message); }
 }
 function fail(message: string, recovery: string): never { throw new ContractError(message, `Recovery: ${recovery}`); }
-export function harnessIds(plan: ProjectPlan) { return HARNESS_IDS.filter((id) => plan.harnesses[id] !== undefined); }
+export function harnessIds(plan: ProjectPlan) { return Object.keys(plan.harnesses).sort(); }
 export function harnessPlan(plan: ProjectPlan, id: HarnessId) {
   const harness = plan.harnesses[id];
   if (!harness) fail(`harness ${id} is not selected`, "Declare it in skill.mod, select it through a setup, or pass --harness.");
@@ -161,11 +161,11 @@ function frontmatterValue(key: string, text: string) {
   const node = document.get(key, true);
   return isScalar(node) ? node.value === null ? "" : String(node.value) : null;
 }
-function skillDocument(raw: string, id: HarnessId, source: string) {
+function skillDocument(mod: SkillMod, raw: string, id: HarnessId, source: string) {
   const lines = raw.split("\n");
   const end = frontmatterEnd(lines, true);
   const yaml = end === null ? "" : lines.slice(1, end).join("\n");
-  const projected = applyBlocks(id, yaml, source);
+  const projected = applyBlocks(mod, id, yaml, source);
   const document = parseDocument(projected);
   if (document.errors.length) fail(`invalid YAML frontmatter: ${document.errors[0]!.message}`, "Fix the frontmatter and retry.");
   return { document, body: end === null ? raw : lines.slice(end + 1).join("\n") };
@@ -178,7 +178,7 @@ function applyFieldOverrides(project: Project, entry: SkillEntry, id: HarnessId,
   if (!applicable.length) return raw;
   const upstreamBody = bodyOf(raw, true);
   let body = upstreamBody;
-  const document = applicable.some((item) => item.field !== "body") ? skillDocument(raw, id, entry.name).document : null;
+  const document = applicable.some((item) => item.field !== "body") ? skillDocument(project.mod, raw, id, entry.name).document : null;
   const readValue = (value: FieldOverride["value"]) => value.kind === "string" ? value.text : readFileSync(resolveProjectPath(project, value.text, "file"), "utf8");
   for (const item of applicable) {
     if (item.operation === "replace") {
@@ -228,16 +228,20 @@ function frontmatterPlan(raw: string, rendered: string): FrontmatterPlan {
   const result = frontmatterKeys(rendered);
   return { source, retained: source.filter((key) => result.includes(key)), omitted: source.filter((key) => !result.includes(key)), rendered: result };
 }
-function fenceMatch(line: string) { return line.match(/^\s*\{\{([#^])([a-z0-9 -]+)\}\}\s*$/); }
-function canonicalHarness(name: string): HarnessId {
-  if ((HARNESS_IDS as readonly string[]).includes(name)) return name as HarnessId;
-  fail(`unknown harness ${name} in renderer fence`, `Use ${HARNESS_IDS.join(", ")}.`);
+function fenceMatch(line: string) { return line.match(/^\s*\{\{([#^])([a-z0-9 ._-]+)\}\}\s*$/); }
+function fenceTargets(mod: SkillMod, list: string): HarnessId[] {
+  const known: readonly string[] = mod.version === 2 ? [...new Set([...HARNESS_IDS, ...mod.agents.ids])] : HARNESS_IDS;
+  const targets = list.trim().split(/\s+/);
+  for (const name of targets) {
+    if (!known.includes(name)) fail(`unknown harness ${name} in renderer fence`, `Use ${known.join(", ")}.`);
+  }
+  return targets;
 }
-function fenceTransforms(id: HarnessId, text: string): Transformations["fences"] {
+function fenceTransforms(mod: SkillMod, id: HarnessId, text: string): Transformations["fences"] {
   return text.split("\n").flatMap((line) => {
     const match = fenceMatch(line);
     if (!match) return [];
-    const targets = match[2]!.trim().split(/\s+/).map(canonicalHarness);
+    const targets = fenceTargets(mod, match[2]!);
     const listed = targets.includes(id);
     const include = match[1] === "#";
     return [{ kind: "fence" as const, mode: include ? "include" as const : "exclude" as const, targets, outcome: ((include && listed) || (!include && !listed)) ? "selected" as const : "omitted" as const }];
@@ -257,7 +261,7 @@ function lineOf(text: string, needle: string) {
   const index = text.indexOf(needle);
   return index < 0 ? 1 : text.slice(0, index).split("\n").length;
 }
-function applyBlocks(id: HarnessId, text: string, source: string) {
+function applyBlocks(mod: SkillMod, id: HarnessId, text: string, source: string) {
   const out: string[] = [];
   let active = true;
   let inBlock = false;
@@ -266,7 +270,7 @@ function applyBlocks(id: HarnessId, text: string, source: string) {
     const open = fenceMatch(line);
     if (open) {
       if (inBlock) fail(`${at}: nested renderer fences are not supported`, "Close the current fence with {{/}} before opening another.");
-      const targets = open[2]!.trim().split(/\s+/).map(canonicalHarness);
+      const targets = fenceTargets(mod, open[2]!);
       const listed = targets.includes(id);
       active = open[1] === "#" ? listed : !listed;
       inBlock = true;
@@ -283,9 +287,9 @@ function applyBlocks(id: HarnessId, text: string, source: string) {
   if (inBlock) fail(`${source}: unclosed {{#...}} or {{^...}} fence`, "Add {{/}} on its own line.");
   return out.join("\n");
 }
-function renderText(id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, text: string, source: string) {
+function renderText(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, text: string, source: string) {
   const hidden = hideCodeMarkup(text);
-  let rendered = applyBlocks(id, hidden, source);
+  let rendered = applyBlocks(mod, id, hidden, source);
   for (const name of Object.keys(tokens).sort()) rendered = rendered.replaceAll(`{{${name}}}`, tokens[name]!);
   rendered = rendered.replaceAll("$@", facts.argSyntax);
   const leftover = rendered.match(/\{\{([A-Za-z0-9_.^#/ -]*)\}\}/s);
@@ -299,20 +303,20 @@ function renderText(id: HarnessId, facts: HarnessFacts, tokens: Record<string, s
   }
   return showCodeMarkup(rendered);
 }
-function transformations(id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, source: string): Transformations {
+function transformations(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, source: string): Transformations {
   const raw = hideCodeMarkup(source);
   return {
-    fences: fenceTransforms(id, raw),
+    fences: fenceTransforms(mod, id, raw),
     tokens: Object.keys(tokens).sort().filter((name) => raw.includes(`{{${name}}}`)).map((name) => ({ kind: "token-substituted", token: name, value: tokens[name]! })),
     argSyntax: raw.includes("$@") ? { kind: "arg-syntax-substituted", from: "$@", to: facts.argSyntax } : null,
     command: [],
   };
 }
-function renderSkill(id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, raw: string, source: string) {
-  return filterFrontmatter(renderText(id, facts, tokens, raw, source), facts.skillFrontmatter);
+function renderSkill(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, raw: string, source: string) {
+  return filterFrontmatter(renderText(mod, id, facts, tokens, raw, source), facts.skillFrontmatter);
 }
-function renderCommand(id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, raw: string, source: string) {
-  return filterFrontmatter(renderText(id, facts, tokens, raw, source), facts.commandFrontmatter);
+function renderCommand(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, raw: string, source: string) {
+  return filterFrontmatter(renderText(mod, id, facts, tokens, raw, source), facts.commandFrontmatter);
 }
 function walkSupport(root: string, prefix = ""): string[] {
   return readdirSync(join(root, prefix), { withFileTypes: true }).flatMap((entry) => {
@@ -418,17 +422,17 @@ export function replacementKey(origin: string, item: FieldOverride) {
   return sha256(JSON.stringify([origin, item.skill, item.field, item.agent]));
 }
 
-export function replacementHash(raw: string, item: FieldOverride) {
+export function replacementHash(mod: SkillMod, raw: string, item: FieldOverride) {
   return item.field === "body" ? sha256(bodyOf(raw, true)) : sha256(JSON.stringify((item.agent ? [item.agent] : HARNESS_IDS).map((id) => {
-    const { document } = skillDocument(raw, id, item.skill);
+    const { document } = skillDocument(mod, raw, id, item.skill);
     return [document.has(item.field), document.toJS({ mapAsMap: true })?.get(item.field)];
   }), (_, value) => value instanceof Map ? Object.fromEntries(value) : value));
 }
 
 export const sharedSkillsPath = ".agents/skills";
-export const skillRoots = {
-  claude: ".claude", codex: ".codex", cursor: ".cursor", grok: ".grok", opencode: ".opencode", pi: ".pi",
-} satisfies Record<HarnessId, string>;
+export function skillRoot(id: HarnessId) {
+  return id === "pi" ? ".pi/agent" : (HARNESS_IDS as readonly string[]).includes(id) ? `.${id}` : `.harness-${id}`;
+}
 
 function skillOmissions(project: Project, id: HarnessId, setupOmissions: HarnessPlan["omittedSkills"]) {
   const mod = project.mod;
@@ -451,7 +455,7 @@ function buildAuthoredSkills(project: Project, id: HarnessId, facts: HarnessFact
     const raw = readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8");
     const overridden = applyFieldOverrides(project, entry, id, raw);
     const source = v2 ? overridden.replaceAll("\r\n", "\n") : overridden;
-    const body = renderSkill(id, facts, tokens, source, sourcePath(entry, "SKILL.md"));
+    const body = renderSkill(project.mod, id, facts, tokens, source, sourcePath(entry, "SKILL.md"));
     if (facts.agentSkillNames && (entry.name.length > 64 || !agentSkillName.test(entry.name))) fail(`invalid Agent Skill name ${JSON.stringify(entry.name)} rendered for ${id}`, "Rename the skill using at most 64 lowercase letters, numbers, and single hyphens.");
     return {
       name: entry.name,
@@ -461,7 +465,7 @@ function buildAuthoredSkills(project: Project, id: HarnessId, facts: HarnessFact
       delivery: { kind: "file", path: `${skillPath}/${entry.name}/SKILL.md` },
       sha256: sha256(body),
       frontmatter: frontmatterPlan(v2 ? raw.replaceAll("\r\n", "\n") : raw, body),
-      transformations: transformations(id, facts, tokens, source),
+      transformations: transformations(project.mod, id, facts, tokens, source),
       supportFiles: supportFiles(entry, `${skillPath}/${entry.name}`),
       body,
       sourceDir: join(entry.root, entry.name),
@@ -469,19 +473,19 @@ function buildAuthoredSkills(project: Project, id: HarnessId, facts: HarnessFact
   });
 }
 
-function skillPlacements(mod: Project["mod"], skills: ReadonlyMap<HarnessId, SkillPlan[]>) {
-  const readers = [...skills.keys()].filter((id) => id !== "claude");
+function skillPlacements(mod: Project["mod"], skills: ReadonlyMap<HarnessId, SkillPlan[]>, readsShared: (id: HarnessId) => boolean) {
+  const readers = [...skills.keys()].filter(readsShared);
   const privateSkills = new Set(mod.version === 2 ? [
     ...mod.only.flatMap(({ skills }) => skills),
-    ...mod.skips.filter(({ agents }) => agents.some((id) => id !== "claude")).flatMap(({ skills }) => skills),
+    ...mod.skips.filter(({ agents }) => agents.some(readsShared)).flatMap(({ skills }) => skills),
   ] : []);
   const placements: SkillPlacement[] = [];
   const candidates = new Map<string, SkillPlacement[]>();
   for (const [id, plans] of skills) for (const skill of plans) {
     const perHarness = mod.version === 1 || skill.transformations.command.length > 0;
-    const placement = { id, skill, root: perHarness ? id : id === "pi" ? ".pi/agent" : skillRoots[id] };
+    const placement = { id, skill, root: perHarness ? id : skillRoot(id) };
     placements.push(placement);
-    if (!perHarness && id !== "claude" && !privateSkills.has(skill.name)) {
+    if (!perHarness && readsShared(id) && !privateSkills.has(skill.name)) {
       const group = candidates.get(skill.name) ?? [];
       group.push(placement);
       candidates.set(skill.name, group);
@@ -523,8 +527,8 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
 
   const commands: CommandPlan[] = commandsAsSkills ? [] : selectedCommands.map((entry) => {
     const raw = readFileSync(join(entry.root, entry.name), "utf8");
-    const body = renderCommand(id, facts, tokens, raw, commandSource(entry).path!);
-    return { name: entry.name, source: commandSource(entry), delivery: { kind: "file", path: `${commandRoot!}/${entry.name}` }, sha256: sha256(body), frontmatter: frontmatterPlan(raw, body), transformations: transformations(id, facts, tokens, raw), body };
+    const body = renderCommand(project.mod, id, facts, tokens, raw, commandSource(entry).path!);
+    return { name: entry.name, source: commandSource(entry), delivery: { kind: "file", path: `${commandRoot!}/${entry.name}` }, sha256: sha256(body), frontmatter: frontmatterPlan(raw, body), transformations: transformations(project.mod, id, facts, tokens, raw), body };
   });
   uniqueByName(commands.map((command) => ({ name: command.name, origin: command.source.origin ?? command.source.kind })), `delivered command for ${id}`);
 
@@ -535,7 +539,7 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
     const name = entry.name.replace(/\.md$/, "");
     if (facts.agentSkillNames && (name.length > 64 || !agentSkillName.test(name))) fail(`invalid Agent Skill name ${JSON.stringify(name)} synthesized from command ${entry.name} for ${id}`, "Rename the command using at most 64 lowercase letters, numbers, and single hyphens.");
     const raw = readFileSync(join(entry.root, entry.name), "utf8");
-    const rendered = renderText(id, facts, tokens, raw, commandSource(entry).path!);
+    const rendered = renderText(project.mod, id, facts, tokens, raw, commandSource(entry).path!);
     const description = frontmatterValue("description", rendered) ?? `Run the ${name} prompt when explicitly invoked.`;
     const hint = frontmatterValue("argument-hint", rendered);
     const extra = [
@@ -543,7 +547,7 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
       ...Object.entries(facts.syntheticSkillFrontmatter ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}: ${typeof value === "boolean" ? value : JSON.stringify(value)}`),
     ];
     const body = `---\nname: ${name}\ndescription: ${JSON.stringify(description)}${extra.length ? `\n${extra.join("\n")}` : ""}\n---\n\n${bodyOf(rendered).replace(/^\n/, "")}`;
-    const commandTransforms = transformations(id, facts, tokens, raw);
+    const commandTransforms = transformations(project.mod, id, facts, tokens, raw);
     commandTransforms.command = ["command-synthesized-as-skill"];
     return {
       name,
@@ -563,7 +567,7 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
 
   const rulesPath = resolveProjectPath(project, project.mod.roots.rules, "file");
   const rulesRaw = readFileSync(rulesPath, "utf8");
-  const rulesBody = renderText(id, facts, tokens, rulesRaw, project.mod.roots.rules);
+  const rulesBody = renderText(project.mod, id, facts, tokens, rulesRaw, project.mod.roots.rules);
   return {
     id,
     facts,
@@ -590,28 +594,49 @@ export function resolvePlan(project: Project, options: ResolveOptions = {}, prev
   const paths = cachedDependencyPaths(project, options.overrides);
   const entries = resolveEntries(project, { ...options, overrides: paths });
   const scope = setup?.root ?? "home";
-  const harnesses: ProjectPlan["harnesses"] = {};
-  const sharedLayout = project.mod.version === 2;
-  const installPaths = (id: HarnessId) => {
-    const paths = facts[id].installPaths[scope];
-    return sharedLayout && id === "codex" ? { ...paths, skills: ".codex/skills" } : paths;
+  const harnesses: ProjectPlan["harnesses"] = Object.create(null);
+  const mod = project.mod;
+  const declarations = (id: HarnessId) => mod.version === 2
+    ? [mod.declarations.find((entry) => entry.id === id), setup?.declarations?.find((entry) => entry.id === id)]
+    : [];
+  const readsShared = (id: HarnessId) => agentReadsShared(mod, id, setup);
+  const profile = (id: HarnessId) => {
+    const builtin = Object.hasOwn(facts, id) ? facts[id as BuiltinHarnessId] : undefined;
+    const overrides = Object.assign({}, ...declarations(id).map((entry) => entry?.paths));
+    const installPaths: HarnessInstallPaths = {
+      ...builtin?.installPaths[scope],
+      ...(mod.version === 2 && id === "codex" ? { skills: ".codex/skills" } : {}),
+      ...(mod.version === 2 && id === "claude" ? { rules: ".claude/CLAUDE.md" } : {}),
+      ...overrides,
+    };
+    if (!installPaths.skills) fail(`agent ${id} has no skills path${setup ? ` on machine ${setup.name}` : ""}`, `Declare a skills path in harness ${id}.`);
+    const resolved: HarnessFacts = {
+      name: id, argSyntax: "$@",
+      skillFrontmatter: ["name", "description"], commandFrontmatter: ["description", "argument-hint"], commandMerge: "skill",
+      ...builtin,
+      installPaths: { home: installPaths, project: installPaths },
+      ...(overrides.commands ? { commandMerge: "file" } : {}),
+    };
+    return { facts: resolved, installPaths };
   };
   const skills = new Map<HarnessId, SkillPlan[]>();
   for (const id of selected) {
-    const plan = buildHarness(project, id, facts[id], installPaths(id), entries);
+    const resolved = profile(id);
+    const plan = buildHarness(project, id, resolved.facts, resolved.installPaths, entries);
     harnesses[id] = plan;
     skills.set(id, plan.skills);
   }
-  if (project.mod.version === 2 && !setup && options.harnesses?.some((id) => id !== "claude")) {
-    for (const id of [...project.mod.agents.ids, ...previouslyRendered]) {
-      if (id === "claude" || skills.has(id)) continue;
+  if (mod.version === 2 && !setup && options.harnesses?.some(readsShared)) {
+    for (const id of [...mod.agents.ids, ...previouslyRendered]) {
+      if (!readsShared(id) || skills.has(id)) continue;
       const omitted = skillOmissions(project, id, entries.setupOmissions);
-      skills.set(id, buildAuthoredSkills(project, id, facts[id], installPaths(id).skills, entries.skills.filter((entry) => !omitted[entry.name])));
+      const resolved = profile(id);
+      skills.set(id, buildAuthoredSkills(project, id, resolved.facts, resolved.installPaths.skills, entries.skills.filter((entry) => !omitted[entry.name])));
     }
   }
   const placements: SkillPlacement[] = [];
   const placed = new Set<string>();
-  for (const placement of skillPlacements(project.mod, skills)) {
+  for (const placement of skillPlacements(mod, skills, readsShared)) {
     const { id, root, skill } = placement;
     if (!selected.includes(id) && !previouslyRendered.includes(id)) continue;
     const path = `${root}/skills/${skill.name}`;
@@ -624,7 +649,7 @@ export function resolvePlan(project: Project, options: ResolveOptions = {}, prev
     if (item.operation !== "set") return false;
     const entry = entries.allSkills.find(({ name }) => name === item.skill)!;
     const old = baselines.get(replacementKey(entry.origin, item));
-    return old !== undefined && old !== replacementHash(readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8"), item);
+    return old !== undefined && old !== replacementHash(project.mod, readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8"), item);
   }) : [];
   const regroupedSkills = new Map(previouslyRendered.filter((id) => !selected.includes(id)).map((id) => [id, skills.get(id)!]));
   return { project, harnesses, placements, regroupedSkills, changedOverrides };

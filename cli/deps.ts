@@ -257,7 +257,7 @@ async function overrideBaselines(project: Project, before: LockEntry[], after: L
           : effectiveRoot(project, requirement, requirement.ref.startsWith("path:") ? project.root : await fetchEntry(next!, cache));
         file = join(nextRoot, item.skill, "SKILL.md");
       }
-      if (existsSync(file)) baselines.set(key, replacementHash(readFileSync(file, "utf8"), item));
+      if (existsSync(file)) baselines.set(key, replacementHash(mod, readFileSync(file, "utf8"), item));
     }
   }
   return baselines;

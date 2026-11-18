@@ -12,8 +12,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { contractFor, harnessIds, harnessPlan, publicSkill, resolvePlan, sha256, skillRoots, type ProjectPlan, type ResolveOptions, type SkillPlan } from "./contract.ts";
-import type { HarnessId } from "./mod.ts";
+import { contractFor, harnessIds, harnessPlan, publicSkill, resolvePlan, sha256, skillRoot, type ProjectPlan, type ResolveOptions, type SkillPlan } from "./contract.ts";
+import { agentReadsShared, type HarnessId } from "./mod.ts";
 import type { Project } from "./project.ts";
 
 export type RenderOptions = ResolveOptions & {
@@ -119,7 +119,7 @@ function writeSkills(stage: string, plan: ProjectPlan) {
   for (const { id, root, skill } of plan.placements) {
     if (root === id) continue;
     writeSkill(stage, root, skill);
-    roots.add(root === ".agents" ? root : skillRoots[id]);
+    roots.add(root.split("/")[0]!);
   }
   for (const root of roots) writeState(stage, plan, root);
 }
@@ -215,15 +215,16 @@ export function renderProject(project: Project, options: RenderOptions = {}): Re
   const targetExists = existsSync(target);
   const existingManaged = targetExists && statSync(target).isDirectory() ? managedHarnesses(target) : [];
   const targeted = options.harnesses?.length ? options.harnesses : undefined;
-  const sharedRender = sharedLayout && (!targeted || targeted.some((id) => id !== "claude"));
+  const readsShared = (id: HarnessId) => agentReadsShared(project.mod, id);
+  const sharedRender = sharedLayout && (!targeted || targeted.some(readsShared));
   const previouslyRendered = sharedRender && targeted
-    ? (Object.keys(skillRoots) as HarnessId[]).filter((id) => id !== "claude" && existingManaged.includes(id))
+    ? existingManaged.filter(readsShared)
     : [];
   const plan = resolvePlan(project, options, previouslyRendered);
   const harnesses = harnessIds(plan);
   const ownedHarnesses = [...new Set([
     ...harnesses,
-    ...(sharedLayout ? [...harnesses, ...previouslyRendered].map((id) => skillRoots[id]) : []),
+    ...(sharedLayout ? [...harnesses, ...previouslyRendered].map((id) => skillRoot(id).split("/")[0]!) : []),
     ...(sharedRender ? [".agents"] : []),
     ...(!targeted ? existingManaged : []),
   ])].sort();

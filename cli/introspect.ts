@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { contractFor, harnessIds, harnessPlan, resolvePlan, schemaFor, sha256, type ResolveOptions, type SkillPlan } from "./contract.ts";
 import { loadHarnesses } from "./harness.ts";
-import { HARNESS_IDS, type HarnessId } from "./mod.ts";
+import { HARNESS_IDS, type BuiltinHarnessId, type HarnessId } from "./mod.ts";
 import { discoverProject, type Project } from "./project.ts";
 import { resolveSetup } from "./setup.ts";
 
@@ -46,7 +46,7 @@ export function listCommand(project: Project, selector: "skills" | "harnesses" |
     const facts = loadHarnesses();
     const ids = options.harnesses?.length ? [...new Set(options.harnesses)] : [...HARNESS_IDS];
     const harnesses = ids.map((id) => {
-      const { name, ...profile } = facts[id];
+      const { name, ...profile } = Object.hasOwn(facts, id) ? facts[id as BuiltinHarnessId] : harnessPlan(resolvePlan(project, { ...options, harnesses: [id] }), id).facts;
       return { name, profile };
     });
     emit({ schemaVersion: 1, harnesses }, options.format, () => ids.join("\n"));
@@ -96,13 +96,16 @@ export function inspectCommand(project: Project, name: string, options: ResolveO
   }).join("\n\n"));
 }
 export function checkCommand(project: Project, names: string[], options: ResolveOptions & { harnesses?: HarnessId[] | undefined; strict?: boolean | undefined; format: OutputFormat }) {
-  const plan = resolvePlan(project, options);
-  const ids = harnessIds(plan);
-  const known = new Set(ids.flatMap((id) => harnessPlan(plan, id).skills.map((skill) => skill.name)));
+  const { mod } = project;
+  const machineOnly = mod.version === 2 && [...mod.agents.ids, ...(options.harnesses ?? [])].some((id) =>
+    !(HARNESS_IDS as readonly string[]).includes(id) && !mod.declarations.some((entry) => entry.id === id && entry.paths.skills));
+  const machines = machineOnly ? Object.keys(mod.setups) : [];
+  const plans = machines.length ? machines.map((setup) => resolvePlan(project, { ...options, setup })) : [resolvePlan(project, options)];
+  const known = new Set(plans.flatMap((plan) => harnessIds(plan).flatMap((id) => harnessPlan(plan, id).skills.map((skill) => skill.name))));
   for (const name of names) if (!known.has(name)) fail(`unknown skill: ${name}`, "Run `skillful list skills` to see available selectors.");
   const selected = names.length ? new Set(names) : null;
   const warnings: Array<{ code: string; harness: HarnessId; skill?: string; message: string }> = [];
-  for (const id of ids) {
+  for (const plan of plans) for (const id of harnessIds(plan)) {
     const harness = harnessPlan(plan, id);
     const delivered = new Set(harness.skills.map((skill) => skill.name));
     const changed = new Map(plan.changedOverrides.filter(({ skill, agent }) => (!agent || agent === id) && delivered.has(skill) && (!selected || selected.has(skill))).map((item) => [`${item.skill}.${item.field}`, item]));
@@ -110,8 +113,9 @@ export function checkCommand(project: Project, names: string[], options: Resolve
     for (const skill of harness.skills) if ((!selected || selected.has(skill.name)) && !skill.body.trim()) warnings.push({ code: "empty-skill", harness: id, skill: skill.name, message: "rendered skill body is empty" });
     for (const command of harness.commands) if (!command.body.trim()) warnings.push({ code: "empty-command", harness: id, message: `${command.name} renders empty` });
   }
-  const ok = warnings.length === 0 || !options.strict;
-  emit({ schemaVersion: 1, ok, strict: Boolean(options.strict), warnings }, options.format, () => warnings.length ? warnings.map((warning) => `${warning.harness}: ${warning.message}`).join("\n") : "OK");
+  const uniqueWarnings = [...new Map(warnings.map((warning) => [JSON.stringify(warning), warning])).values()];
+  const ok = uniqueWarnings.length === 0 || !options.strict;
+  emit({ schemaVersion: 1, ok, strict: Boolean(options.strict), warnings: uniqueWarnings }, options.format, () => uniqueWarnings.length ? uniqueWarnings.map((warning) => `${warning.harness}: ${warning.message}`).join("\n") : "OK");
   if (!ok) process.exitCode = 1;
 }
 function git(cwd: string, args: string[]) {

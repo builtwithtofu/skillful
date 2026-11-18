@@ -1,9 +1,10 @@
 import { posix } from "node:path";
 
 export const HARNESS_IDS = ["claude", "codex", "cursor", "grok", "opencode", "pi"] as const;
-export type HarnessId = (typeof HARNESS_IDS)[number];
-export function mapHarnesses<T>(value: (id: HarnessId) => T): Record<HarnessId, T> {
-  return Object.fromEntries(HARNESS_IDS.map((id) => [id, value(id)])) as Record<HarnessId, T>;
+export type BuiltinHarnessId = (typeof HARNESS_IDS)[number];
+export type HarnessId = string;
+export function mapHarnesses<T>(value: (id: BuiltinHarnessId) => T): Record<BuiltinHarnessId, T> {
+  return Object.fromEntries(HARNESS_IDS.map((id) => [id, value(id)])) as Record<BuiltinHarnessId, T>;
 }
 
 
@@ -30,6 +31,7 @@ export type SetupHarness = WithComments<{
   paths: Partial<Record<"skills" | "commands" | "rules", string>>;
   pathComments: Partial<Record<"skills" | "commands" | "rules", Comments>>;
 }>;
+type HarnessDeclaration = SetupHarness & { readsShared?: true; sharedComments?: Comments; closingComments: Comments };
 export type Setup = WithComments<{
   name: string;
   root: "home" | "project";
@@ -37,6 +39,8 @@ export type Setup = WithComments<{
   mode: "only" | "omit" | undefined;
   selectors: SetupSelector[];
   harnesses: SetupHarness[];
+  declarations?: HarnessDeclaration[];
+  closingComments?: Comments;
 }>;
 type SkillModBase = {
   headerComments: Comments;
@@ -54,12 +58,18 @@ export type FieldOverride = WithComments<{ skill: string; field: string; value: 
 type SkillMod2 = SkillModBase & {
   version: 2;
   agents: WithComments<{ ids: HarnessId[] }>;
+  declarations: HarnessDeclaration[];
   skips: AgentSelection[];
   only: AgentSelection[];
   fieldOverrides: FieldOverride[];
   trailingComments: Comments;
 };
 export type SkillMod = (SkillModBase & { version: 1 }) | SkillMod2;
+
+export function agentReadsShared(mod: SkillMod, id: HarnessId, setup?: Setup | null) {
+  return ((HARNESS_IDS as readonly string[]).includes(id) && id !== "claude") || (mod.version === 2 &&
+    [...mod.declarations, ...(setup?.declarations ?? [])].some((entry) => entry.id === id && entry.readsShared));
+}
 
 export class ModError extends Error {
   constructor(readonly filename: string, readonly line: number, readonly column: number, message: string, readonly recovery: string) {
@@ -324,9 +334,12 @@ export function parseMod(text: string, filename = "skill.mod"): SkillMod {
 }
 
 function parseMod2(base: SkillModBase, lines: string[], start: number, filename: string): SkillMod2 {
-  const mod: SkillMod2 = { ...base, version: 2, setups: Object.create(null), agents: { ids: [], comments: [] }, skips: [], only: [], fieldOverrides: [], trailingComments: [] };
+  const mod: SkillMod2 = { ...base, version: 2, harnesses: Object.create(null), setups: Object.create(null), agents: { ids: [], comments: [] }, declarations: [], skips: [], only: [], fieldOverrides: [], trailingComments: [] };
   const single = new Set<string>();
   let pending: Comments = [];
+  let machine: Setup | undefined;
+  let harness: HarnessDeclaration | undefined;
+  const references: { token: Token; line: number }[] = [];
   for (let offset = start; offset < lines.length; offset++) {
     const line = offset + 1;
     const raw = lines[offset]!;
@@ -342,9 +355,54 @@ function parseMod2(base: SkillModBase, lines: string[], start: number, filename:
     const bare = (token: Token | undefined, word: string) => token?.value === word && !token.quoted;
     const words = (tokens: Token[]) => tokens.length > 0 && tokens.every((token) => token.value && (token.quoted || !v2Punctuation.test(token.value)));
     const agents = (tokens: Token[]) => tokens.map((token) => {
-      if (!(HARNESS_IDS as readonly string[]).includes(token.value)) fail(filename, line, token.column, `unknown agent ${JSON.stringify(token.value)}`, `Use one of: ${HARNESS_IDS.join(", ")}.`);
-      return token.value as HarnessId;
+      references.push({ token, line });
+      return token.value;
     });
+    const readHarness = (entry: HarnessDeclaration, fields: Token[]) => {
+      while (fields.length) {
+        const [key, operand, ...rest] = fields;
+        if (bare(key, "}") && !operand) { harness = undefined; return; }
+        if (bare(key, "reads-shared") && !entry.readsShared) {
+          entry.readsShared = true;
+          entry.sharedComments = key === directive ? comments : [];
+          fields = fields.slice(1);
+          continue;
+        }
+        const category = key!.value;
+        if (key!.quoted || (category !== "skills" && category !== "commands" && category !== "rules") || !operand || !words([operand]) || entry.paths[category] !== undefined) {
+          fail(filename, line, key!.column, "invalid harness field", "Use skills, commands, rules or reads-shared once each.");
+        }
+        entry.paths[category] = setupPath(operand!.value, filename, line, operand!.column);
+        entry.pathComments[category] = key === directive ? comments : [];
+        fields = rest;
+      }
+    };
+    if (harness) {
+      if (bare(directive, "}")) harness.closingComments = comments;
+      readHarness(harness, [directive!, ...args]);
+      continue;
+    }
+    if (value === "harness") {
+      const id = args[0]?.value ?? "";
+      if (!aliasPattern.test(id) || args[0]?.quoted || !bare(args[1], "{") || id === "opencode-v2") syntax("harness <agent> { skills <path> commands <path> rules <path> reads-shared }");
+      const declarations = machine?.declarations ?? mod.declarations;
+      if (declarations.some((entry) => entry.id === id)) fail(filename, line, column, `duplicate harness ${id}`, "Keep one declaration per scope.");
+      harness = { id, paths: {}, pathComments: {}, comments, closingComments: [] };
+      declarations.push(harness);
+      readHarness(harness, args.slice(2));
+      continue;
+    }
+    if (machine) {
+      if (value === "}" && !args.length) {
+        if (!machine.declarations!.length) fail(filename, line, column, `machine ${machine.name} block needs a harness`, "Use the one-line machine form if there are no harness overrides.");
+        machine.closingComments = comments;
+        machine = undefined;
+      } else if (value === "skip" && words(args)) {
+        machine.mode = "omit";
+        machine.selectors.push(...args.map((token, index) => ({ kind: "omit-skill" as const, name: token.value, comments: index ? [] : comments, line })));
+      } else fail(filename, line, column, "invalid machine block entry", "Use harness, skip, or a closing brace.");
+      continue;
+    }
     if (["local", "rules", "agents"].includes(value)) {
       if (single.has(value)) fail(filename, line, column, `${value} may appear at most once`, "Keep one declaration.");
       single.add(value);
@@ -387,9 +445,14 @@ function parseMod2(base: SkillModBase, lines: string[], start: number, filename:
       case "machine": {
         const name = args[0]?.value ?? "";
         const skills = args.slice(2);
-        if (!aliasPattern.test(name) || (args.length > 1 && (!bare(args[1], "skip") || !words(skills)))) syntax("machine <name> [skip <skills>]");
+        const block = args.length === 2 && bare(args[1], "{");
+        if (!aliasPattern.test(name) || (!block && args.length > 1 && (!bare(args[1], "skip") || !words(skills)))) syntax("machine <name> [skip <skills>] or machine <name> {");
         if (Object.hasOwn(mod.setups, name)) fail(filename, line, column, `duplicate machine ${name}`, "Keep one declaration per machine.");
         mod.setups[name] = { name, root: "home", rootComments: [], mode: skills.length ? "omit" : undefined, selectors: skills.map((token) => ({ kind: "omit-skill", name: token.value, comments: [], line })), harnesses: [], comments };
+        if (block) {
+          machine = mod.setups[name]!;
+          machine.declarations = [];
+        }
         break;
       }
       default: {
@@ -412,12 +475,17 @@ function parseMod2(base: SkillModBase, lines: string[], start: number, filename:
       }
     }
   }
+  if (harness || machine) fail(filename, lines.length, 1, `unclosed ${harness ? "harness" : "machine"} block`, "Add its closing brace.");
+  const known = new Set<string>([...HARNESS_IDS, ...mod.declarations.map(({ id }) => id), ...Object.values(mod.setups).flatMap((setup) => setup.declarations?.map(({ id }) => id) ?? [])]);
+  for (const { token, line } of references) if (!known.has(token.value)) fail(filename, line, token.column, `unknown agent ${JSON.stringify(token.value)}`, "Use a built-in agent or declare it with harness.");
   mod.trailingComments = pending;
   for (const id of new Set([...mod.agents.ids, ...mod.skips.flatMap((skip) => skip.agents)])) {
     const omissions = mod.skips.filter((skip) => skip.agents.includes(id)).flatMap((skip) => skip.skills.map((selector): Omission => ({ kind: "omit-skill", selector, reason: skip.reason, comments: [] })));
     mod.harnesses[id] = { id, tokens: {}, tokenComments: {}, omissions, comments: [] };
   }
-  for (const setup of Object.values(mod.setups)) setup.harnesses = mod.agents.ids.map((id) => ({ id, paths: {}, pathComments: {}, comments: [] }));
+  for (const setup of Object.values(mod.setups)) setup.harnesses = mod.agents.ids.map((id) => ({
+    id, paths: { ...mod.declarations.find((entry) => entry.id === id)?.paths, ...setup.declarations?.find((entry) => entry.id === id)?.paths }, pathComments: {}, comments: [],
+  }));
   return mod;
 }
 
@@ -440,8 +508,24 @@ function formatMod2(mod: SkillMod2): string {
   for (const [directive, selections] of [["only", mod.only], ["skip", mod.skips]] as const) {
     section(selections.map(({ skills, agents, reason, comments }) => [...comments, `${directive} ${skills.map((skill) => skill === "on" ? JSON.stringify(skill) : quote(skill)).join(" ")} on ${agents.join(" ")} ${JSON.stringify(reason)}`]));
   }
-  section(Object.values(mod.setups).map(({ name, selectors, comments }) =>
-    [...comments, `machine ${name}${selectors.length ? ` skip ${selectors.map(({ name }) => quote(name)).join(" ")}` : ""}`]));
+  const declaration = (entry: HarnessDeclaration, indent = "") => [
+    ...entry.comments.map((comment) => indent + comment),
+    `${indent}harness ${entry.id} {`,
+    ...Object.entries(entry.paths).flatMap(([key, path]) => [
+      ...(entry.pathComments[key as keyof SetupHarness["paths"]] ?? []).map((comment) => `${indent}  ${comment}`),
+      `${indent}  ${key} ${quote(path)}`,
+    ]),
+    ...(entry.readsShared ? [...(entry.sharedComments ?? []).map((comment) => `${indent}  ${comment}`), `${indent}  reads-shared`] : []),
+    ...entry.closingComments.map((comment) => `${indent}  ${comment}`),
+    `${indent}}`,
+  ];
+  section(mod.declarations.map((entry) => declaration(entry)));
+  section(Object.values(mod.setups).map(({ name, selectors, comments, declarations, closingComments }) => declarations ? [
+    ...comments, `machine ${name} {`,
+    ...declarations.flatMap((entry) => declaration(entry, "  ")),
+    ...selectors.flatMap((selector) => [...selector.comments.map((comment) => `  ${comment}`), `  skip ${quote(selector.name)}`]),
+    ...(closingComments ?? []).map((comment) => `  ${comment}`), "}",
+  ] : [...comments, `machine ${name}${selectors.length ? ` skip ${selectors.map(({ name }) => quote(name)).join(" ")}` : ""}`]));
   if (mod.trailingComments.length) lines.push("", ...mod.trailingComments);
   return `${lines.join("\n")}\n`;
 }
@@ -529,7 +613,7 @@ export function formatMod(mod: SkillMod): string {
 
 export function migrateMod(mod: Extract<SkillMod, { version: 1 }>, filename: string, resolveSkills: () => { name: string; origin: string; sourceKind: string }[]) {
   const unsupported = (feature: string): never => fail(filename, 1, 1, `cannot migrate ${feature} without changing the render`, "Keep using skillful 1, or replace this setting with a skillful 2 equivalent before migrating.");
-  const ids = HARNESS_IDS.filter((id) => mod.harnesses[id] !== undefined);
+  const ids: HarnessId[] = HARNESS_IDS.filter((id) => mod.harnesses[id] !== undefined);
   for (const harness of Object.values(mod.harnesses)) if (Object.keys(harness.tokens).length) unsupported(`tokens for ${harness.id}`);
   const skills = resolveSkills();
   const known = new Set(skills.map(({ name }) => name));
@@ -557,7 +641,6 @@ export function migrateMod(mod: Extract<SkillMod, { version: 1 }>, filename: str
       else skips.push({ skills: [selector], agents: [harness.id], reason, comments: [...comments], line: 1 });
     }
   }
-  const warnings: string[] = [];
   const setups = Object.fromEntries(Object.values(mod.setups).map((setup) => {
     if (setup.root !== "home") unsupported(`project root for setup ${setup.name}`);
     if (setup.mode === "only") unsupported(`only-skill in setup ${setup.name}`);
@@ -567,16 +650,18 @@ export function migrateMod(mod: Extract<SkillMod, { version: 1 }>, filename: str
       requireKnownOmission(name, `setup ${setup.name}`);
       comments.push(...selectorComments, `// ${JSON.stringify(name)}: ${JSON.stringify(reason)}`);
     }
-    for (const { id, paths } of setup.harnesses) {
-      for (const [kind, path] of Object.entries(paths)) {
-        const setting = `${setup.name}: ${id} ${kind} ${JSON.stringify(path)}`;
-        warnings.push(`skillful 2 cannot carry this install path override: ${setting}`);
-        comments.push(`// Previous install path override: ${setting}`);
+    const declarations = setup.harnesses.flatMap((harness) => {
+      const paths = { ...harness.paths };
+      if (agentReadsShared(mod, harness.id) && paths.skills === ".agents/skills") {
+        delete paths.skills;
+        comments.push(...(harness.pathComments.skills ?? []));
+        if (!Object.keys(paths).length) comments.push(...harness.comments);
       }
-    }
-    return [setup.name, { ...setup, comments }];
+      return Object.keys(paths).length ? [{ ...harness, paths, closingComments: [] }] : [];
+    });
+    return [setup.name, { ...setup, comments, ...(declarations.length ? { declarations } : {}) }];
   }));
-  const next: SkillMod2 = { ...mod, version: 2, requires: [...requires.values()], agents: { ids, comments: agentComments }, skips, only: [], setups, fieldOverrides: [], trailingComments: [] };
+  const next: SkillMod2 = { ...mod, version: 2, requires: [...requires.values()], agents: { ids, comments: agentComments }, declarations: [], skips, only: [], setups, fieldOverrides: [], trailingComments: [] };
   const emitted = formatMod2(next).split("\n");
   for (const comment of mod.leadingComments) {
     const index = emitted.indexOf(comment);
@@ -584,7 +669,7 @@ export function migrateMod(mod: Extract<SkillMod, { version: 1 }>, filename: str
     else emitted.splice(index, 1);
   }
   const text = formatMod2(next);
-  return { text, mod: parseMod(text, filename), warnings };
+  return { text, mod: parseMod(text, filename) };
 }
 
 export function formatText(text: string, filename = "skill.mod") { return formatMod(parseMod(text, filename)); }
