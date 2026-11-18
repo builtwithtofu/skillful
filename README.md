@@ -33,8 +33,9 @@ with three changes, four agents and two machines. On `work-mac` it installs:
 
 ```console
 $ skillful install work-mac --dry-run
-Would install into /Users/you: 7 add, 0 change, 0 delete
+Would install into /Users/you: 8 add, 0 change, 0 delete
 add    .agents/skills/release-notes/SKILL.md
+add    .claude/CLAUDE.md
 add    .claude/skills/agent-browser/SKILL.md
 add    .claude/skills/release-notes/SKILL.md
 add    .codex/AGENTS.md
@@ -46,7 +47,8 @@ add    .pi/agent/skills/agent-browser/SKILL.md
 Your own `release-notes` skill is written once to `.agents/skills`, which
 Codex, Cursor, Grok, OpenCode and Pi all read, and once for Claude Code.
 `agent-browser` differs between agents, so each agent that gets it has its own
-copy, and Cursor has none. On `laptop` it is left out altogether.
+copy, and Cursor has none. On `laptop` it is left out altogether. Your rules
+land in each agent's own rules file, such as `~/.claude/CLAUDE.md`.
 
 ## Why skillful
 
@@ -89,6 +91,24 @@ skillful render
 skillful install example --dry-run
 ```
 
+`init` writes the simplest `skill.mod`, which installs as it is:
+
+```text
+skillful 2
+
+local ./skills ./commands
+rules ./rules/global_agents.md
+
+agents claude codex cursor grok opencode pi
+
+machine example
+```
+
+`skillful install example` installs that machine. Name a machine after a
+computer's short hostname (`hostname -s`, in lowercase) and plain
+`skillful install` picks it there. When no machine matches, it stops and
+lists the ones you declared.
+
 To build the project shown above instead, start in a separate directory.
 A project is a directory holding `skill.mod`, your own skills, commands and
 rules, and the `skill.lock` that skillful writes.
@@ -127,7 +147,7 @@ it doesn't own. Commit `skill.mod` and `skill.lock`. On your next machine:
 
 ```sh
 skillful fetch                       # download exactly what the lock names
-skillful install laptop
+skillful install laptop              # or `skillful install`, if its hostname is laptop
 ```
 
 ## Pin
@@ -188,6 +208,33 @@ machine laptop skip agent-browser
 - `skip <skills> on <agents> "reason"` keeps skills from some agents.
 - `machine <name>` declares a machine, and `skip` on its line removes skills
   there only.
+
+Everything about where things install lives in `skill.mod` too. The defaults
+cover the common case, and three more lines cover the rest:
+
+```text
+only release-notes on claude codex "Releases are cut from these two"
+
+harness pi {
+  skills .pi/work/skills
+}
+
+machine studio {
+  harness claude {
+    skills .claude-work/skills
+  }
+  skip agent-browser
+}
+```
+
+- `only <skills> on <agents> "reason"` gives skills to the named agents and no
+  others.
+- `harness <agent> { skills <path> commands <path> rules <path> }` changes
+  where an agent's files go, or defines an agent skillful doesn't know.
+  Anything you leave out keeps its default. Add `reads-shared` for a new
+  agent that reads `.agents/skills`.
+- A `machine` takes braces only when it has its own `harness`, which wins over
+  the top-level one on that machine.
 
 ```sh
 skillful list skills           # which agents get each skill
