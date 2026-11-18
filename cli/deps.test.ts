@@ -111,6 +111,41 @@ describe("dependency transactions and cache", () => {
     expect(readLock(project)[0]!.rev).not.toBe(oldRev);
   });
 
+  test("add writes a use declaration for named skills without changing the manifest version", async () => {
+    const { project, ref, cache } = fixture();
+    const mod = join(project, "skill.mod");
+    writeFileSync(mod, "skillful 2\nagents pi\n");
+
+    await addDependency(discoverProject({ project }), ref, { only: ["skill-b"], cache });
+    expect(readFileSync(mod, "utf8")).toStartWith("skillful 2\n");
+    expect(readFileSync(mod, "utf8")).toContain(`use ${ref} { skill-b }`);
+    expect(readLock(project)[0]?.ref).toBe(ref);
+  });
+  test.each([false, true])("skillful 2 updates and fetches use refs (existing pin: %s)", async (existingPin) => {
+    const { root, project, dependency, ref, cache } = fixture();
+    if (existingPin) await addDependency(discoverProject({ project }), ref, { name: "legacy-alias", cache });
+    const mod = join(project, "skill.mod");
+    const v2 = `skillful 2\nuse ${ref} { skill-a }\nagents pi\n`;
+    writeFileSync(mod, v2);
+    const current = discoverProject({ project });
+    const lock = join(project, "skill.lock");
+    if (existingPin) expect(existsSync(join(cachedDependencyPaths(current, {}, cache)[ref]!, "skill-a", "SKILL.md"))).toBe(true);
+    writeFileSync(join(dependency, "skill-a", "new.txt"), "updated\n");
+    git(dependency, "add", ".");
+    git(dependency, "commit", "-m", "move branch");
+
+    await updateDependencies(current, [ref], cache);
+    const updatedPin = readLock(project);
+    expect(updatedPin).toHaveLength(1);
+    expect(updatedPin[0]).toMatchObject({ ref, rev: git(dependency, "rev-parse", "HEAD") });
+    const pinned = readFileSync(lock, "utf8");
+    const fresh = join(root, "fresh-cache");
+    await fetchDependencies(current, [ref], fresh);
+    const source = cachedDependencyPaths(current, {}, fresh)[ref]!;
+    expect(readFileSync(join(source, "skill-a", "new.txt"), "utf8")).toBe("updated\n");
+    expect(readFileSync(mod, "utf8")).toBe(v2);
+    expect(readFileSync(lock, "utf8")).toBe(pinned);
+  });
   test("updates one declared dependency without requiring unrelated pins", async () => {
     const { root, project, ref, cache } = fixture();
     const modPath = join(project, "skill.mod");

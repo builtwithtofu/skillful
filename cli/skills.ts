@@ -20,11 +20,11 @@ type Topic = {
 const TOPICS: readonly Topic[] = [
   { id: "core", group: "", summary: "Author once, render per harness. What skillful owns, the exact-name contract, and shared rules.", markdown: core },
   { id: "author", group: "Author", summary: "Write one SKILL.md with name+description frontmatter; body says how and when to use it.", markdown: author },
-  { id: "mod", group: "Project", summary: "skill.mod is the canonical project declaration; fmt parses and rewrites it.", markdown: mod },
+  { id: "mod", group: "Project", summary: "Declare sources, agents, and machines in skill.mod; fmt preserves its version.", markdown: mod },
   { id: "deps", group: "Project", summary: "Pull other skill trees via Git: add resolves and fetches; fetch and update use exact pins.", markdown: deps },
   { id: "inspect", group: "Verify", summary: "Show one skill as authored or rendered per harness; check validates. Read-only.", markdown: inspect },
   { id: "render", group: "Ship", summary: "Render a managed build tree; only install writes harness destinations. --dry-run first.", markdown: render },
-  { id: "setup", group: "Ship", summary: "Name machine-specific skill selection, harness outputs, roots, and path exceptions.", markdown: setup },
+  { id: "setup", group: "Ship", summary: "Show a machine or setup: skill selection, harness outputs, and destination paths.", markdown: setup },
 ];
 
 export function resolveSkillTopic(value: string) {

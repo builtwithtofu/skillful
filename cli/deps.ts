@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { cacheKey, narHash } from "./nar.ts";
-import { readLock, validateLock, writeLockAtomic, type LockEntry } from "./lock.ts";
+import { readLock, pinFor, validateLock, writeLockAtomic, type LockEntry } from "./lock.ts";
 import { formatMod, type Require, type SkillMod } from "./mod.ts";
 import { isInside, type Project } from "./project.ts";
 
@@ -150,14 +150,13 @@ function effectiveRoot(project: Project, requirement: Require, wholeTree: string
 export function cachedDependencyPaths(project: Project, overrides: Record<string, string> = {}, explicitCache?: string) {
   const needsLock = project.mod.requires.some((requirement) => !requirement.ref.startsWith("path:"));
   const entries = validateLock(project.mod, readLock(project.root, needsLock));
-  const byName = new Map(entries.map((entry) => [entry.name, entry]));
   const result: Record<string, string> = { ...overrides };
   for (const requirement of project.mod.requires) {
     if (result[requirement.name]) continue;
     const parsed = parseRef(requirement.ref);
     if (parsed.type === "path") result[requirement.name] = effectiveRoot(project, requirement, project.root);
     else {
-      const entry = byName.get(requirement.name)!;
+      const entry = pinFor(project.mod, requirement, entries)!;
       const target = join(cacheRoot(explicitCache), cacheKey(entry.narHash));
       if (!existsSync(target)) fail(`dependency ${requirement.name} is locked but missing from the cache`, "Run skillful fetch; rendering and inspection never access the network.");
       verifyTree(target, entry.narHash, `cached dependency ${requirement.name} (${entry.ref} at ${entry.rev})`);
@@ -169,13 +168,12 @@ export function cachedDependencyPaths(project: Project, overrides: Record<string
 export async function dependencyPaths(project: Project, overrides: Record<string, string> = {}, explicitCache?: string) {
   const entries = readLock(project.root, project.mod.requires.some((requirement) => !requirement.ref.startsWith("path:")));
   validateLock(project.mod, entries);
-  const byName = new Map(entries.map((entry) => [entry.name, entry]));
   const result: Record<string, string> = { ...overrides };
   for (const requirement of project.mod.requires) {
     if (result[requirement.name]) continue;
     const parsed = parseRef(requirement.ref);
     if (parsed.type === "path") result[requirement.name] = effectiveRoot(project, requirement, project.root);
-    else result[requirement.name] = effectiveRoot(project, requirement, await fetchEntry(byName.get(requirement.name)!, explicitCache));
+    else result[requirement.name] = effectiveRoot(project, requirement, await fetchEntry(pinFor(project.mod, requirement, entries)!, explicitCache));
   }
   return result;
 }
@@ -200,13 +198,26 @@ function transactionalWrite(project: Project, mod: SkillMod, entries: LockEntry[
     throw cause;
   }
 }
+function lockName(mod: SkillMod, requirement: Require, entries: LockEntry[]) {
+  if (mod.version === 1) return requirement.name;
+  return pinFor(mod, requirement, entries)?.name ?? `use-${createHash("sha256").update(requirement.ref).digest("hex")}`;
+}
+
+function namedRequirement(mod: SkillMod, name: string, entries: LockEntry[]) {
+  const ref = mod.version === 2 ? entries.find((entry) => entry.name === name)?.ref : undefined;
+  return mod.requires.find((requirement) => requirement.name === (ref ?? name));
+}
 export async function addDependency(project: Project, input: string, options: { name?: string | undefined; only?: string[] | undefined; exclude?: string[] | undefined; cache?: string | undefined } = {}) {
   if (options.only?.length && options.exclude?.length) fail("add cannot mix --only and --exclude", "Choose one selector mode.");
-  const named = project.mod.requires.find((requirement) => requirement.name === input);
+  const { mod } = project;
+  if (mod.version === 2 && (options.name !== undefined || options.exclude !== undefined)) fail("skillful 2 use declarations do not take --name or --exclude", "Use a ref and name the skills with --only or edit the use directive.");
+  const currentPins = mod.version === 2 ? readLock(project.root, false) : undefined;
+  const named = namedRequirement(mod, input, currentPins ?? []);
   const parsedInput = parseRef(named?.ref ?? input);
-  const identified = project.mod.requires.find((requirement) => parseRef(requirement.ref).identity === parsedInput.identity);
-  const existing = named ?? identified;
   const omittedGitHubVersion = input.startsWith("github:") && !input.includes("@");
+  const existing = named ?? (mod.version === 1 || omittedGitHubVersion
+    ? mod.requires.find((requirement) => parseRef(requirement.ref).identity === parsedInput.identity)
+    : undefined);
   const ref = existing && (named !== undefined || omittedGitHubVersion) ? existing.ref : parsedInput.ref;
   const parsed = ref === parsedInput.ref ? parsedInput : parseRef(ref);
   const suppliedMode = options.only !== undefined ? "only" : options.exclude !== undefined ? "exclude" : undefined;
@@ -215,16 +226,17 @@ export async function addDependency(project: Project, input: string, options: { 
   if (existing && (existing.ref !== ref
     || (options.name !== undefined && existing.name !== options.name)
     || (suppliedSelection && !sameSelectors(existing, suppliedMode, suppliedSelectors)))) {
-    fail(`dependency ${existing.name} conflicts with the supplied add details`, "Omit version, --name, and selector flags to use skill.mod, or make supplied values match its require.");
+    fail(`dependency ${existing.name} conflicts with the supplied add details`, "Omit version, --name, and selector flags to use skill.mod, or make supplied values match its declaration.");
   }
-  const name = existing?.name ?? options.name ?? inferredDependencyName(parsed);
-  const requirement = existing ?? { ref, alias: options.name ?? name, name, mode: suppliedMode, selectors: [...suppliedSelectors], comments: [] };
-  const mod = structuredClone(project.mod);
-  if (!existing) mod.requires.push(requirement);
-  if (parsed.type === "path") { effectiveRoot(project, requirement, project.root); writeFileSync(project.modPath, formatMod(mod)); return { requirement, entry: null }; }
-  const entry = await resolveAndFetch(name, ref, options.cache);
-  const oldEntries = readLock(project.root, false).filter((candidate) => candidate.name !== name);
-  transactionalWrite(project, mod, [...oldEntries, entry]);
+  if (!existing && mod.version === 2 && !options.only?.length) fail("a new use declaration needs named skills", "Pass --only for each skill, or declare use in skill.mod before locking it.");
+  const name = existing?.name ?? (mod.version === 2 ? ref : options.name ?? inferredDependencyName(parsed));
+  const requirement = existing ?? { ref, alias: mod.version === 2 ? undefined : options.name ?? name, name, mode: suppliedMode, selectors: [...suppliedSelectors], comments: [] };
+  const nextMod = structuredClone(mod);
+  if (!existing) nextMod.requires.push(requirement);
+  if (parsed.type === "path") { effectiveRoot(project, requirement, project.root); writeFileSync(project.modPath, formatMod(nextMod)); return { requirement, entry: null }; }
+  const oldEntries = currentPins ?? readLock(project.root, false);
+  const entry = await resolveAndFetch(lockName(mod, requirement, oldEntries), ref, options.cache);
+  transactionalWrite(project, nextMod, [...oldEntries.filter((candidate) => candidate.name !== entry.name), entry]);
   return { requirement, entry };
 }
 export async function fetchDependencies(project: Project, names: string[] = [], cache?: string) {
@@ -235,12 +247,11 @@ export async function fetchDependencies(project: Project, names: string[] = [], 
   if (selectedNames.length === 0) {
     selected = validateLock(project.mod, entries);
   } else {
-    const byName = new Map(entries.map((entry) => [entry.name, entry]));
     selected = selectedNames.map((name) => {
-      const requirement = project.mod.requires.find((candidate) => candidate.name === name);
+      const requirement = namedRequirement(project.mod, name, entries);
       if (!requirement) fail(`unknown dependency ${name}`, "Choose a dependency declared in skill.mod.");
       if (requirement.ref.startsWith("path:")) fail(`path dependency ${name} has no pin to fetch`, "Use the local tree directly.");
-      const entry = byName.get(name);
+      const entry = pinFor(project.mod, requirement, entries);
       if (!entry) fail(`dependency ${name} is declared but not locked`, `Run skillful update ${name}.`);
       if (entry.ref !== requirement.ref) fail(`dependency ${name} changed from locked ref ${entry.ref} to ${requirement.ref}`, `Run skillful update ${name} to move the pin.`);
       return entry;
@@ -252,17 +263,17 @@ export async function fetchDependencies(project: Project, names: string[] = [], 
 
 export async function updateDependencies(project: Project, names: string[], cache?: string) {
   const selectedNames = [...new Set(names)];
+  const existing = readLock(project.root, false);
   const remote = project.mod.requires.filter((requirement) => !requirement.ref.startsWith("path:"));
   const selected = selectedNames.length === 0 ? remote : selectedNames.map((name) => {
-    const requirement = project.mod.requires.find((candidate) => candidate.name === name);
+    const requirement = namedRequirement(project.mod, name, existing);
     if (!requirement) fail(`unknown dependency ${name}`, "Choose a dependency declared in skill.mod.");
     if (requirement.ref.startsWith("path:")) fail(`path dependency ${name} has no pin to update`, "Edit the local tree directly.");
     return requirement;
   });
-  const existing = readLock(project.root, false);
   const refreshed: LockEntry[] = [];
-  for (const requirement of selected) refreshed.push(await resolveAndFetch(requirement.name, requirement.ref, cache));
-  const selectedSet = new Set(selected.map((requirement) => requirement.name));
+  for (const requirement of new Set(selected)) refreshed.push(await resolveAndFetch(lockName(project.mod, requirement, existing), requirement.ref, cache));
+  const selectedSet = new Set(refreshed.map((entry) => entry.name));
   const next = [...(selectedNames.length === 0 ? [] : existing.filter((entry) => !selectedSet.has(entry.name))), ...refreshed];
   writeLockAtomic(project.root, next);
   return next;

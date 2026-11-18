@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { SkillMod } from "./mod.ts";
+import type { Require, SkillMod } from "./mod.ts";
 
 export type LockEntry = { name: string; ref: string; rev: string; narHash: string };
 export class LockError extends Error { constructor(message: string, readonly recovery: string) { super(message); } }
@@ -47,16 +47,19 @@ export function readLock(projectRoot: string, required = true) {
   }
   return parseLock(readFileSync(path, "utf8"), path);
 }
+export function pinFor(mod: SkillMod, requirement: Require, entries: LockEntry[]) {
+  return entries.find((entry) => mod.version === 2 ? entry.ref === requirement.ref : entry.name === requirement.name);
+}
 export function validateLock(mod: SkillMod, entries: LockEntry[]) {
   const remote = mod.requires.filter((requirement) => !requirement.ref.startsWith("path:"));
-  const byName = new Map(entries.map((entry) => [entry.name, entry]));
+  const matched = new Set<LockEntry>();
   for (const requirement of remote) {
-    const entry = byName.get(requirement.name);
-    if (!entry) fail(`dependency ${requirement.name} is declared but not locked`, `Run skillful update ${requirement.name} to lock its existing require.`);
+    const entry = pinFor(mod, requirement, entries);
+    if (!entry) fail(`dependency ${requirement.name} is declared but not locked`, `Run skillful update ${requirement.name} to create its pin.`);
     if (entry.ref !== requirement.ref) fail(`dependency ${requirement.name} changed from locked ref ${entry.ref} to ${requirement.ref}`, `Run skillful update ${requirement.name} to deliberately move the pin.`);
+    matched.add(entry);
   }
-  const declared = new Set(remote.map((requirement) => requirement.name));
-  for (const entry of entries) if (!declared.has(entry.name)) fail(`lock contains undeclared dependency ${entry.name}`, "Remove the stale line through skillful update after checking skill.mod.");
+  for (const entry of entries) if (!matched.has(entry)) fail(`lock contains undeclared dependency ${entry.name}`, "Run skillful update to reconcile pins with skill.mod.");
   return entries;
 }
 export function writeLockAtomic(projectRoot: string, entries: LockEntry[]) {

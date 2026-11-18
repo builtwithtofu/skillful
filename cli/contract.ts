@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "
 import { join, relative, resolve } from "node:path";
 import { loadHarnesses, type HarnessFacts, type HarnessInstallPaths } from "./harness.ts";
 import { isScalar, parseDocument } from "yaml";
-import { HARNESS_IDS, mapHarnesses, type HarnessId, type Omission, type Require, type Setup } from "./mod.ts";
+import { HARNESS_IDS, mapHarnesses, ModError, type HarnessId, type Omission, type Require, type Setup } from "./mod.ts";
 import { resolveProjectPath, type Project } from "./project.ts";
 import { cachedDependencyPaths } from "./deps.ts";
 
@@ -307,6 +307,9 @@ function setupFor(project: Project, name: string): Setup {
   fail(`unknown setup: ${name}`, `Choose one of: ${known.join(", ") || "none declared"}.`);
 }
 
+function unknownSkill(project: Project, line: number, name: string, context: string): never {
+  throw new ModError(project.modPath, line, 1, `unknown skill ${name} ${context}`, "Use an exact skill name provided by the declared source or selected by this project.");
+}
 function resolveEntries(project: Project, options: ResolveOptions) {
   const overrides = options.overrides ?? {};
   const declared = new Set(project.mod.requires.map((requirement) => requirement.name));
@@ -315,7 +318,11 @@ function resolveEntries(project: Project, options: ResolveOptions) {
   const skills: SkillEntry[] = sortedDirectoryNames(canonicalRoot).map((name) => ({ name, origin: "canonical", root: canonicalRoot, sourceKind: "canonical" }));
   for (const requirement of project.mod.requires) {
     const root = dependencyRoot(requirement, project, overrides);
-    for (const name of sortedDirectoryNames(root.path).filter((candidate) => selectedBy(requirement, candidate))) skills.push({ name, origin: requirement.name, root: root.path, sourceKind: root.kind });
+    const names = sortedDirectoryNames(root.path).filter((candidate) => selectedBy(requirement, candidate));
+    if (requirement.line !== undefined) {
+      for (const name of requirement.selectors) if (!names.includes(name) || !existsSync(join(root.path, name, "SKILL.md"))) unknownSkill(project, requirement.line, name, `in use ${requirement.ref}`);
+    }
+    for (const name of names) skills.push({ name, origin: requirement.name, root: root.path, sourceKind: root.kind });
   }
   for (const extra of options.extraRoots?.skills ?? []) {
     if (!extra.origin) fail("extra skill root is missing an origin", "Give every extra root a stable provenance name.");
@@ -326,7 +333,16 @@ function resolveEntries(project: Project, options: ResolveOptions) {
   uniqueByName(skills, "skill");
   const setup = options.setup ? setupFor(project, options.setup) : undefined;
   const knownSkills = new Set(skills.map((entry) => entry.name));
-  for (const selector of setup?.selectors ?? []) if (!knownSkills.has(selector.name)) fail(`unknown skill ${selector.name} in setup ${setup!.name}`, "Use an exact skill name from `skillful list skills`.");
+  const mod = project.mod;
+  if (mod.version === 2) {
+    for (const skip of mod.skips) for (const name of skip.skills) if (!knownSkills.has(name)) unknownSkill(project, skip.line, name, "in skip");
+    for (const { skill, line } of mod.descriptions) if (!knownSkills.has(skill)) unknownSkill(project, line, skill, "in description override");
+    for (const machine of Object.values(mod.setups)) for (const selector of machine.selectors) {
+      if (!knownSkills.has(selector.name)) unknownSkill(project, selector.line!, selector.name, `in machine ${machine.name}`);
+    }
+  } else {
+    for (const selector of setup?.selectors ?? []) if (!knownSkills.has(selector.name)) fail(`unknown skill ${selector.name} in setup ${setup!.name}`, "Use an exact skill name from `skillful list skills`.");
+  }
   const selectedSkills = setup?.mode === "only"
     ? skills.filter((entry) => setup.selectors.some((selector) => selector.name === entry.name))
     : setup?.mode === "omit"
@@ -446,8 +462,10 @@ export function resolvePlan(project: Project, options: ResolveOptions = {}): Pro
     ? setup.harnesses.map((harness) => harness.id)
     : options.harnesses?.length
       ? options.harnesses
-      : HARNESS_IDS.filter((id) => project.mod.harnesses[id] !== undefined))];
-  if (!selected.length) fail("project selects no harnesses", "Declare a harness in skill.mod, select one through a setup, or pass --harness.");
+      : project.mod.version === 2
+        ? project.mod.agents.ids
+        : HARNESS_IDS.filter((id) => project.mod.harnesses[id] !== undefined))];
+  if (!selected.length) fail("project selects no harnesses", project.mod.version === 2 ? "List agents in skill.mod or pass --harness." : "Declare a harness in skill.mod, select one through a setup, or pass --harness.");
   const facts = loadHarnesses();
   const entries = resolveEntries(project, { ...options, overrides: cachedDependencyPaths(project, options.overrides) });
   const scope = setup?.root ?? "home";

@@ -15,6 +15,7 @@ export type Require = WithComments<{
   name: string;
   mode: "only" | "exclude" | undefined;
   selectors: string[];
+  line?: number;
 }>;
 export type Omission = WithComments<{ kind: "omit-skill" | "omit-command"; selector: string; reason: string }>;
 export type Harness = WithComments<{
@@ -23,7 +24,7 @@ export type Harness = WithComments<{
   tokenComments: Record<string, Comments>;
   omissions: Omission[];
 }>;
-export type SetupSelector = WithComments<{ kind: "only-skill" | "omit-skill"; name: string; reason?: string | undefined }>;
+export type SetupSelector = WithComments<{ kind: "only-skill" | "omit-skill"; name: string; reason?: string | undefined; line?: number }>;
 export type SetupHarness = WithComments<{
   id: HarnessId;
   paths: Partial<Record<"skills" | "commands" | "rules", string>>;
@@ -37,7 +38,7 @@ export type Setup = WithComments<{
   selectors: SetupSelector[];
   harnesses: SetupHarness[];
 }>;
-export type SkillMod = {
+type SkillModBase = {
   headerComments: Comments;
   roots: { skills: string; commands: string; rules: string };
   rootComments: Record<"skills" | "commands" | "rules", Comments>;
@@ -47,6 +48,16 @@ export type SkillMod = {
   /** Compatibility view for callers that only need comment accounting. */
   leadingComments: Comments;
 };
+type Skip = WithComments<{ skills: string[]; agents: HarnessId[]; reason: string; line: number }>;
+type Description = WithComments<{ skill: string; value: string; line: number }>;
+type SkillMod2 = SkillModBase & {
+  version: 2;
+  agents: WithComments<{ ids: HarnessId[] }>;
+  skips: Skip[];
+  descriptions: Description[];
+  trailingComments: Comments;
+};
+export type SkillMod = (SkillModBase & { version: 1 }) | SkillMod2;
 
 export class ModError extends Error {
   constructor(readonly filename: string, readonly line: number, readonly column: number, message: string, readonly recovery: string) {
@@ -64,7 +75,8 @@ function setupPath(value: string, filename: string, line: number, column: number
   return normalized === "." ? normalized : normalized.replace(/\/+$/, "");
 }
 
-type Token = { value: string; column: number };
+type Token = { value: string; column: number; quoted?: true };
+const v2Punctuation = /^[{}=]$/;
 type ParseBlock =
   | { kind: "require"; value: Require; line: number }
   | { kind: "harness"; value: Harness; line: number }
@@ -74,7 +86,7 @@ function fail(filename: string, line: number, column: number, message: string, r
   throw new ModError(filename, line, column, message, `Recovery: ${recovery}`);
 }
 
-function tokensFor(raw: string, filename: string, line: number): Token[] {
+function tokensFor(raw: string, filename: string, line: number, compact = false): Token[] {
   const tokens: Token[] = [];
   let index = 0;
   while (index < raw.length) {
@@ -92,15 +104,17 @@ function tokensFor(raw: string, filename: string, line: number): Token[] {
       }
       if (end === raw.length) fail(filename, line, column, "unterminated JSON string", "Close the quoted value with a JSON double quote.");
       const literal = raw.slice(index, end + 1);
-      try { tokens.push({ value: JSON.parse(literal), column }); }
+      try { tokens.push({ value: JSON.parse(literal), column, quoted: true }); }
       catch { fail(filename, line, column, "invalid JSON string", "Use a JSON-escaped double-quoted value."); }
       index = end + 1;
       continue;
     }
-    let end = index;
-    while (end < raw.length && !/\s/.test(raw[end]!)) end++;
+    let end = index + 1;
+    if (!compact || !v2Punctuation.test(raw[index]!)) {
+      while (end < raw.length && !/\s/.test(raw[end]!) && !(compact && (v2Punctuation.test(raw[end]!) || raw[end] === '"'))) end++;
+    }
     const value = raw.slice(index, end);
-    if (value !== "(" && value !== ")" && !barePattern.test(value)) fail(filename, line, column, `invalid bare token ${JSON.stringify(value)}`, "Use a quoted JSON string for whitespace, //, parentheses, or quotes.");
+    if (!compact && value !== "(" && value !== ")" && !barePattern.test(value)) fail(filename, line, column, `invalid bare token ${JSON.stringify(value)}`, "Use a quoted JSON string for whitespace, //, parentheses, or quotes.");
     tokens.push({ value, column });
     index = end;
   }
@@ -118,7 +132,7 @@ export function parseMod(text: string, filename = "skill.mod"): SkillMod {
   if (text.includes("\r")) fail(filename, 1, 1, "skill.mod must use LF line endings", "Run `skillful fmt` to rewrite the manifest with LF line endings.");
   const roots = { ...defaults };
   const rootComments: SkillMod["rootComments"] = { skills: [], commands: [], rules: [] };
-  const mod: SkillMod = { headerComments: [], roots, rootComments, requires: [], harnesses: {}, setups: {}, leadingComments: [] };
+  const mod: SkillModBase & { version: 1 } = { version: 1, headerComments: [], roots, rootComments, requires: [], harnesses: {}, setups: {}, leadingComments: [] };
   const seenRoots = new Set<string>();
   const seenRequireNames = new Set<string>();
   let pending: Comments = [];
@@ -137,12 +151,13 @@ export function parseMod(text: string, filename = "skill.mod"): SkillMod {
     const first = tokens[0]!;
 
     if (!sawHeader) {
-      if (first.value !== "skillful" || tokens.length !== 2 || tokens[1]!.value !== "1") {
-        if (first.value === "skillful") fail(filename, line, first.column, "unsupported skillful version", "Use exactly `skillful 1` as the first semantic directive.");
-        fail(filename, line, first.column, "the first semantic directive must be exactly `skillful 1`", "Put `skillful 1` before roots, requires, or harnesses.");
+      if (first.value !== "skillful" || tokens.length !== 2 || (tokens[1]!.value !== "1" && tokens[1]!.value !== "2")) {
+        if (first.value === "skillful") fail(filename, line, first.column, "unsupported skillful version", "Use `skillful 1` or `skillful 2` as the first semantic directive.");
+        fail(filename, line, first.column, "the first semantic directive must be `skillful 1` or `skillful 2`", "Put the version header at the top of the file.");
       }
       sawHeader = true;
       mod.headerComments = pending;
+      if (tokens[1]!.value === "2") return parseMod2(mod, lines, offset + 1, filename);
       pending = [];
       continue;
     }
@@ -301,12 +316,115 @@ export function parseMod(text: string, filename = "skill.mod"): SkillMod {
     }
     fail(filename, line, first.column, `unknown directive ${JSON.stringify(first.value)}`, "Use skillful, skills, commands, rules, require, harness, or setup.");
   }
-  if (!sawHeader) fail(filename, 1, 1, "the first semantic directive must be exactly `skillful 1`", "Add `skillful 1` to the manifest.");
+  if (!sawHeader) fail(filename, 1, 1, "the first semantic directive must be `skillful 1` or `skillful 2`", "Add a version header to the manifest.");
   if (block) fail(filename, block.line, 1, `unclosed ${block.kind} block`, "Add `)` on its own semantic line.");
   return mod;
 }
 
+function parseMod2(base: SkillModBase, lines: string[], start: number, filename: string): SkillMod2 {
+  const mod: SkillMod2 = { ...base, version: 2, setups: Object.create(null), agents: { ids: [], comments: [] }, skips: [], descriptions: [], trailingComments: [] };
+  const single = new Set<string>();
+  let pending: Comments = [];
+  for (let offset = start; offset < lines.length; offset++) {
+    const line = offset + 1;
+    const raw = lines[offset]!;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("//")) { pending.push(trimmed); mod.leadingComments.push(trimmed); continue; }
+    const [directive, ...args] = tokensFor(raw, filename, line, true);
+    const { value, column, quoted } = directive!;
+    if (quoted) fail(filename, line, column, `unknown directive ${JSON.stringify(value)}`, "Write directive names without quotes.");
+    const comments = pending;
+    pending = [];
+    const syntax = (example: string): never => fail(filename, line, column, `invalid ${value} directive`, `Use \`${example}\`.`);
+    const bare = (token: Token | undefined, word: string) => token?.value === word && !token.quoted;
+    const words = (tokens: Token[]) => tokens.length > 0 && tokens.every((token) => token.value && (token.quoted || !v2Punctuation.test(token.value)));
+    const agents = (tokens: Token[]) => tokens.map((token) => {
+      if (!(HARNESS_IDS as readonly string[]).includes(token.value)) fail(filename, line, token.column, `unknown agent ${JSON.stringify(token.value)}`, `Use one of: ${HARNESS_IDS.join(", ")}.`);
+      return token.value as HarnessId;
+    });
+    if (["local", "rules", "agents"].includes(value)) {
+      if (single.has(value)) fail(filename, line, column, `${value} may appear at most once`, "Keep one declaration.");
+      single.add(value);
+    }
+    switch (value) {
+      case "local":
+        if (args.length !== 2 || !words(args)) syntax("local <skills-path> <commands-path>");
+        mod.roots.skills = args[0]!.value;
+        mod.roots.commands = args[1]!.value;
+        mod.rootComments.skills = comments;
+        break;
+      case "rules":
+        if (args.length !== 1 || !words(args)) syntax("rules <path>");
+        mod.roots.rules = args[0]!.value;
+        mod.rootComments.rules = comments;
+        break;
+      case "use": {
+        const ref = args[0]?.value ?? "";
+        const skills = args.slice(2, -1);
+        if (!/^(github|git|path):.+/.test(ref) || !bare(args[1], "{") || !bare(args.at(-1), "}") || !words(skills)) syntax("use <ref> { <skills> }");
+        if (mod.requires.some((entry) => entry.ref === ref)) fail(filename, line, column, `duplicate source ${ref}`, "List the skills from this source in one use directive.");
+        mod.requires.push({ ref, name: ref, alias: undefined, mode: "only", selectors: skills.map((token) => token.value), comments, line });
+        break;
+      }
+      case "agents":
+        if (!args.length) syntax("agents <agents>");
+        mod.agents = { ids: [...new Set(agents(args))], comments };
+        break;
+      case "skip": {
+        const on = args.findIndex((token) => bare(token, "on"));
+        const skills = args.slice(0, on);
+        const targets = args.slice(on + 1, -1);
+        const reason = args.at(-1);
+        if (on < 1 || !words(skills) || !targets.length || !reason?.quoted) syntax('skip <skills> on <agents> "reason"');
+        mod.skips.push({ skills: skills.map((token) => token.value), agents: agents(targets), reason: reason!.value, comments, line });
+        break;
+      }
+      case "machine": {
+        const name = args[0]?.value ?? "";
+        const skills = args.slice(2);
+        if (!aliasPattern.test(name) || (args.length > 1 && (!bare(args[1], "skip") || !words(skills)))) syntax("machine <name> [skip <skills>]");
+        if (Object.hasOwn(mod.setups, name)) fail(filename, line, column, `duplicate machine ${name}`, "Keep one declaration per machine.");
+        mod.setups[name] = { name, root: "home", rootComments: [], mode: skills.length ? "omit" : undefined, selectors: skills.map((token) => ({ kind: "omit-skill", name: token.value, comments: [], line })), harnesses: [], comments };
+        break;
+      }
+      default:
+        if (value.endsWith(".description") && value !== ".description") {
+          if (args.length !== 2 || !bare(args[0], "=") || !args[1]?.quoted) syntax('<skill>.description = "value"');
+          mod.descriptions.push({ skill: value.slice(0, -".description".length), value: args[1]!.value, comments, line });
+          break;
+        }
+        fail(filename, line, column, `unknown directive ${JSON.stringify(value)}`, "Use local, rules, use, agents, skip, or machine.");
+    }
+  }
+  mod.trailingComments = pending;
+  for (const id of new Set([...mod.agents.ids, ...mod.skips.flatMap((skip) => skip.agents)])) {
+    const omissions = mod.skips.filter((skip) => skip.agents.includes(id)).flatMap((skip) => skip.skills.map((selector): Omission => ({ kind: "omit-skill", selector, reason: skip.reason, comments: [] })));
+    mod.harnesses[id] = { id, tokens: {}, tokenComments: {}, omissions, comments: [] };
+  }
+  for (const setup of Object.values(mod.setups)) setup.harnesses = mod.agents.ids.map((id) => ({ id, paths: {}, pathComments: {}, comments: [] }));
+  return mod;
+}
+
+function formatMod2(mod: SkillMod2): string {
+  const quote = (value: string) => value && !/[\s{}="]/.test(value) && !value.startsWith("//") ? value : JSON.stringify(value);
+  const lines = [...mod.headerComments, "skillful 2"];
+  const section = (entries: string[][]) => { if (entries.length) lines.push("", ...entries.flat()); };
+  section([
+    [...mod.rootComments.skills, `local ${quote(mod.roots.skills)} ${quote(mod.roots.commands)}`],
+    [...mod.rootComments.rules, `rules ${quote(mod.roots.rules)}`],
+  ]);
+  section(mod.requires.map(({ ref, selectors, comments }) => [...comments, `use ${quote(ref)} { ${selectors.map(quote).join(" ")} }`]));
+  section(mod.descriptions.map(({ skill, value, comments }) => [...comments, `${skill}.description = ${JSON.stringify(value)}`]));
+  if (mod.agents.ids.length) section([[...mod.agents.comments, `agents ${mod.agents.ids.join(" ")}`]]);
+  section(mod.skips.map(({ skills, agents, reason, comments }) => [...comments, `skip ${skills.map((skill) => skill === "on" ? JSON.stringify(skill) : quote(skill)).join(" ")} on ${agents.join(" ")} ${JSON.stringify(reason)}`]));
+  section(Object.values(mod.setups).map(({ name, selectors, comments }) =>
+    [...comments, `machine ${name}${selectors.length ? ` skip ${selectors.map(({ name }) => quote(name)).join(" ")}` : ""}`]));
+  if (mod.trailingComments.length) lines.push("", ...mod.trailingComments);
+  return `${lines.join("\n")}\n`;
+}
 export function formatMod(mod: SkillMod): string {
+  if (mod.version === 2) return formatMod2(mod);
   const lines: string[] = [];
   emitComments(lines, mod.headerComments);
   lines.push("skillful 1");
