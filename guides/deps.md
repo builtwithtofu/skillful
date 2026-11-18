@@ -23,6 +23,8 @@ In skillful 2, a `use` declaration is identified by its exact ref, such as
 `skillful update github:angular/skills@main`. `fetch` and `update` can reuse pins
 from a skillful 1 lock with matching refs. Run bare `update` after changing a
 ref to remove the old pin. To add a new `use`, pass `--only` for each skill.
+Bare `skillful update` also records baselines for new front-matter replacements.
+It keeps existing baselines so `skillful check` can report drift after a pin moves.
 
 `path:` dependencies are live source and stay out of `skill.lock`. Paths resolve
 from `skill.mod`; a nested project may use a sibling within the same Git source

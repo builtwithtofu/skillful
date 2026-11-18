@@ -10,15 +10,22 @@ const namePattern = /^[a-z0-9][a-z0-9._-]*$/;
 const hashPattern = /^sha256-[A-Za-z0-9+/]{43}=$/;
 const revPattern = /^[0-9a-f]{40,64}$/;
 
-export function parseLock(text: string, filename = "skill.lock") {
+function parseLockFile(text: string, filename: string) {
   if (/(^|\n)(<{7}|={7}|>{7})/.test(text)) fail(`${filename} contains a lock merge conflict`, "Resolve the conflict manually, keep one sorted pin per dependency, then run skillful fetch.");
   if (text.includes("\r")) fail(`${filename} must use LF line endings`, "Rewrite it with skillful update after preserving intended pins.");
   const lines = text.endsWith("\n") ? text.slice(0, -1).split("\n") : text.split("\n");
-  if (lines.length === 1 && lines[0] === "") return [];
+  const baselines = new Map<string, string>();
+  if (lines.length === 1 && lines[0] === "") return { entries: [], baselines };
   const entries: LockEntry[] = [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]!;
     const number = index + 1;
+    if (line.startsWith("@override ")) {
+      const match = line.match(/^@override ([0-9a-f]{64}) ([0-9a-f]{64})$/);
+      if (!match || baselines.has(match[1]!)) fail(`${filename}:${number}: invalid or duplicate override baseline`, "Restore the baseline from version control or remove this row and run skillful update.");
+      baselines.set(match[1]!, match[2]!);
+      continue;
+    }
     if (!line || line.trim() !== line || /\s{2,}/.test(line)) fail(`${filename}:${number}: noncanonical spacing or blank line`, "Keep exactly four single-space-separated fields per line and run skillful update.");
     const fields = line.split(" ");
     if (fields.length !== 4) fail(`${filename}:${number}: expected name ref rev narHash`, "Keep exactly four fields; do not add comments or quotes.");
@@ -33,7 +40,12 @@ export function parseLock(text: string, filename = "skill.lock") {
   if (new Set(names).size !== names.length) fail(`${filename} contains a duplicate dependency name`, "Keep one pin per dependency.");
   const sorted = [...names].sort();
   if (names.some((name, index) => name !== sorted[index])) fail(`${filename} is not sorted by dependency name`, "Run skillful update to rewrite the lock canonically.");
-  return entries;
+  return { entries, baselines };
+}
+export function parseLock(text: string, filename = "skill.lock") { return parseLockFile(text, filename).entries; }
+export function readOverrideBaselines(projectRoot: string) {
+  const path = join(projectRoot, "skill.lock");
+  return existsSync(path) ? parseLockFile(readFileSync(path, "utf8"), path).baselines : new Map<string, string>();
 }
 export function formatLock(entries: LockEntry[]) {
   const sorted = [...entries].sort((left, right) => left.name.localeCompare(right.name));
@@ -62,9 +74,9 @@ export function validateLock(mod: SkillMod, entries: LockEntry[]) {
   for (const entry of entries) if (!matched.has(entry)) fail(`lock contains undeclared dependency ${entry.name}`, "Run skillful update to reconcile pins with skill.mod.");
   return entries;
 }
-export function writeLockAtomic(projectRoot: string, entries: LockEntry[]) {
+export function writeLockAtomic(projectRoot: string, entries: LockEntry[], baselines = readOverrideBaselines(projectRoot)) {
   const path = join(projectRoot, "skill.lock");
   const temporary = join(dirname(path), `.skill.lock.tmp-${randomUUID()}`);
-  writeFileSync(temporary, formatLock(entries));
+  writeFileSync(temporary, formatLock(entries) + [...baselines.keys()].sort().map((key) => `@override ${key} ${baselines.get(key)}\n`).join(""));
   renameSync(temporary, path);
 }
