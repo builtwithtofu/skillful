@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { cacheKey } from "./nar.ts";
@@ -337,9 +337,8 @@ machine personal skip foreign example
 
   test.skipIf(process.platform === "win32")("runtime failures without a recovery hint remain structured JSON errors", () => {
     const root = temp();
-    const project = join(root, "project");
+    const project = join(import.meta.dir, "..", "tests", "fixtures", "locked-project");
     const cache = join(root, "cache");
-    cpSync(join(import.meta.dir, "..", "tests", "fixtures", "locked-project"), project, { recursive: true });
     const hash = readFileSync(join(project, "skill.lock"), "utf8").match(/sha256-[A-Za-z0-9+/]{43}=/)?.[0];
     if (!hash) throw new Error("locked fixture lost its NAR hash");
     const cacheEntry = join(cache, "skillful", cacheKey(hash));

@@ -108,8 +108,11 @@
           cli = pkgs.runCommandLocal "skillful-cli-tests" {
             nativeBuildInputs = [ pkgs.bun pkgs.gitMinimal pkgs.gnutar ];
           } ''
-            cd ${self}
-            NODE_PATH=${bunDeps} bun test cli
+            mkdir source
+            cp -R ${self}/{cli,guides,harnesses,package.json,templates,tests} source/
+            cd source
+            ln -s ${bunDeps} node_modules
+            bun test cli
             touch "$out"
           '';
           standalone = pkgs.runCommandLocal "skillful-standalone-check" { } ''
