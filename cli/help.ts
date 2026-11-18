@@ -142,6 +142,7 @@ export const INSTALL_AFTER_HELP = `
 The only command that writes live harness destinations. Records exclusive
 ownership, refuses unmanaged or edited collisions, and removes only unchanged
 stale files. Named setups select home or project paths from their declared root.
+In skillful 2, missing default local sources are skipped unless explicitly declared.
 Skillful 2 selects the machine matching your short hostname unless you name one.
 Use only <skills> on <agents> "reason" in skill.mod to restrict who gets a skill.
 Use a top-level harness block to set destinations or define an agent. A machine's
@@ -188,6 +189,7 @@ Examples:
 
 export const CHECK_AFTER_HELP = `
 Read-only. --strict promotes warnings to failure.
+In skillful 2, missing default local sources are skipped unless explicitly declared.
 When an agent's skills path is set only on machines, check uses those machine configurations.
 Warns when an upstream front-matter field or body replaced with = in skill.mod differs from
 its baseline in skill.lock. Update alone keeps existing baselines. After reviewing and
