@@ -67,6 +67,26 @@ describe("project CLI", () => {
     expect(existsSync(join(home, ".pi"))).toBe(false);
   });
 
+  test("install moves an only skill out of shared storage and delivers it only to the named agents", () => {
+    const { project, home } = machineFixture();
+    const manifest = join(project, "skill.mod");
+    const shared = join(home, ".agents/skills/example/SKILL.md");
+    const baseline = runIn(project, home, "install", "desk");
+    expect(baseline.exitCode, output(baseline).stderr).toBe(0);
+    expect(existsSync(shared)).toBe(true);
+
+    writeFileSync(manifest, 'skillful 2\nagents claude codex pi\nmachine desk\nonly example on pi "Uses Pi tools."\n');
+    const formatted = run(project, "fmt");
+    expect(formatted.exitCode, output(formatted).stderr).toBe(0);
+    expect(readFileSync(manifest, "utf8")).toContain('only example on pi "Uses Pi tools."');
+    const installed = runIn(project, home, "install", "desk");
+    expect(installed.exitCode, output(installed).stderr).toBe(0);
+    expect(readFileSync(join(home, ".pi/agent/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
+    expect(existsSync(shared)).toBe(false);
+    expect(existsSync(join(home, ".codex/skills/example/SKILL.md"))).toBe(false);
+    expect(existsSync(join(home, ".claude/skills/example/SKILL.md"))).toBe(false);
+  });
+
   test("render and install honor a skip for a shared reader outside the agents list", () => {
     const { project, home } = machineFixture();
     writeFileSync(join(project, "skill.mod"), 'skillful 2\nagents pi\nskip example on codex "Pi only."\nmachine desk\n');

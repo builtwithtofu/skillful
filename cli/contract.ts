@@ -384,6 +384,7 @@ function resolveEntries(project: Project, options: ResolveOptions) {
   const mod = project.mod;
   if (mod.version === 2) {
     for (const skip of mod.skips) for (const name of skip.skills) if (!knownSkills.has(name)) unknownSkill(project, skip.line, name, "in skip");
+    for (const only of mod.only) for (const name of only.skills) if (!knownSkills.has(name)) unknownSkill(project, only.line, name, "in only");
     for (const { skill, field, line } of mod.fieldOverrides) if (!knownSkills.has(skill)) unknownSkill(project, line, skill, `in ${field === "body" ? "body" : "front-matter"} override`);
     for (const machine of Object.values(mod.setups)) for (const selector of machine.selectors) {
       if (!knownSkills.has(selector.name)) unknownSkill(project, selector.line!, selector.name, `in machine ${machine.name}`);
@@ -430,8 +431,16 @@ export const skillRoots = {
 } satisfies Record<HarnessId, string>;
 
 function skillOmissions(project: Project, id: HarnessId, setupOmissions: HarnessPlan["omittedSkills"]) {
-  const omissions = project.mod.harnesses[id]?.omissions ?? [];
-  return { ...setupOmissions, ...Object.fromEntries(omissions.filter((item) => item.kind === "omit-skill").map((item) => [item.selector, { code: omissionCode(item), message: item.reason }])) };
+  const mod = project.mod;
+  const omissions = mod.harnesses[id]?.omissions ?? [];
+  const excluded = new Map<string, HarnessPlan["omittedSkills"][string]>();
+  if (mod.version === 2) {
+    const included = new Set(mod.only.filter(({ agents }) => agents.includes(id)).flatMap(({ skills }) => skills));
+    for (const { skills, reason } of mod.only) for (const selector of skills) {
+      if (!included.has(selector)) excluded.set(selector, { code: "project-omission", message: reason });
+    }
+  }
+  return { ...setupOmissions, ...Object.fromEntries(excluded), ...Object.fromEntries(omissions.filter((item) => item.kind === "omit-skill").map((item) => [item.selector, { code: omissionCode(item), message: item.reason }])) };
 }
 
 const agentSkillName = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -462,8 +471,10 @@ function buildAuthoredSkills(project: Project, id: HarnessId, facts: HarnessFact
 
 function skillPlacements(mod: Project["mod"], skills: ReadonlyMap<HarnessId, SkillPlan[]>) {
   const readers = [...skills.keys()].filter((id) => id !== "claude");
-  const privateSkills = new Set(mod.version === 2 ? mod.skips
-    .filter(({ agents }) => agents.some((id) => id !== "claude")).flatMap(({ skills }) => skills) : []);
+  const privateSkills = new Set(mod.version === 2 ? [
+    ...mod.only.flatMap(({ skills }) => skills),
+    ...mod.skips.filter(({ agents }) => agents.some((id) => id !== "claude")).flatMap(({ skills }) => skills),
+  ] : []);
   const placements: SkillPlacement[] = [];
   const candidates = new Map<string, SkillPlacement[]>();
   for (const [id, plans] of skills) for (const skill of plans) {

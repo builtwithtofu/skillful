@@ -48,13 +48,14 @@ type SkillModBase = {
   /** Compatibility view for callers that only need comment accounting. */
   leadingComments: Comments;
 };
-type Skip = WithComments<{ skills: string[]; agents: HarnessId[]; reason: string; line: number }>;
+type AgentSelection = WithComments<{ skills: string[]; agents: HarnessId[]; reason: string; line: number }>;
 type OverrideValue = { kind: "string" | "file"; text: string };
 export type FieldOverride = WithComments<{ skill: string; field: string; value: OverrideValue; agent?: HarnessId; line: number } & ({ operation: "set" | "append" } | { operation: "replace"; match: OverrideValue })>;
 type SkillMod2 = SkillModBase & {
   version: 2;
   agents: WithComments<{ ids: HarnessId[] }>;
-  skips: Skip[];
+  skips: AgentSelection[];
+  only: AgentSelection[];
   fieldOverrides: FieldOverride[];
   trailingComments: Comments;
 };
@@ -323,7 +324,7 @@ export function parseMod(text: string, filename = "skill.mod"): SkillMod {
 }
 
 function parseMod2(base: SkillModBase, lines: string[], start: number, filename: string): SkillMod2 {
-  const mod: SkillMod2 = { ...base, version: 2, setups: Object.create(null), agents: { ids: [], comments: [] }, skips: [], fieldOverrides: [], trailingComments: [] };
+  const mod: SkillMod2 = { ...base, version: 2, setups: Object.create(null), agents: { ids: [], comments: [] }, skips: [], only: [], fieldOverrides: [], trailingComments: [] };
   const single = new Set<string>();
   let pending: Comments = [];
   for (let offset = start; offset < lines.length; offset++) {
@@ -372,13 +373,15 @@ function parseMod2(base: SkillModBase, lines: string[], start: number, filename:
         if (!args.length) syntax("agents <agents>");
         mod.agents = { ids: [...new Set(agents(args))], comments };
         break;
+      case "only":
       case "skip": {
         const on = args.findIndex((token) => bare(token, "on"));
         const skills = args.slice(0, on);
         const targets = args.slice(on + 1, -1);
         const reason = args.at(-1);
-        if (on < 1 || !words(skills) || !targets.length || !reason?.quoted) syntax('skip <skills> on <agents> "reason"');
-        mod.skips.push({ skills: skills.map((token) => token.value), agents: agents(targets), reason: reason!.value, comments, line });
+        if (on < 1 || !words(skills) || !targets.length || !reason?.quoted) syntax(`${value} <skills> on <agents> "reason"`);
+        const selections = value === "only" ? mod.only : mod.skips;
+        selections.push({ skills: skills.map((token) => token.value), agents: agents(targets), reason: reason!.value, comments, line });
         break;
       }
       case "machine": {
@@ -391,7 +394,7 @@ function parseMod2(base: SkillModBase, lines: string[], start: number, filename:
       }
       default: {
         const field = value.match(/^(.+?)\.([a-zA-Z0-9][a-zA-Z0-9_-]*)(\.(append|replace))?$/);
-        if (!field || (field[4] === "replace" && field[2] !== "body")) fail(filename, line, column, `unknown directive ${JSON.stringify(value)}`, "Use local, rules, use, agents, skip, machine, or a skill override.");
+        if (!field || (field[4] === "replace" && field[2] !== "body")) fail(filename, line, column, `unknown directive ${JSON.stringify(value)}`, "Use local, rules, use, agents, only, skip, machine, or a skill override.");
         const scoped = bare(args[0], "on");
         if (scoped && !args[1]) fail(filename, line, args[0]!.column, "expected an agent after on", `Use one of: ${HARNESS_IDS.join(", ")}.`);
         const operands = args.slice(scoped ? 2 : 0);
@@ -434,7 +437,9 @@ function formatMod2(mod: SkillMod2): string {
     return [...comments, `${target} ${item.operation === "replace" ? `${overrideValue(item.match)} with` : "="} ${overrideValue(value)}`];
   }));
   if (mod.agents.ids.length) section([[...mod.agents.comments, `agents ${mod.agents.ids.join(" ")}`]]);
-  section(mod.skips.map(({ skills, agents, reason, comments }) => [...comments, `skip ${skills.map((skill) => skill === "on" ? JSON.stringify(skill) : quote(skill)).join(" ")} on ${agents.join(" ")} ${JSON.stringify(reason)}`]));
+  for (const [directive, selections] of [["only", mod.only], ["skip", mod.skips]] as const) {
+    section(selections.map(({ skills, agents, reason, comments }) => [...comments, `${directive} ${skills.map((skill) => skill === "on" ? JSON.stringify(skill) : quote(skill)).join(" ")} on ${agents.join(" ")} ${JSON.stringify(reason)}`]));
+  }
   section(Object.values(mod.setups).map(({ name, selectors, comments }) =>
     [...comments, `machine ${name}${selectors.length ? ` skip ${selectors.map(({ name }) => quote(name)).join(" ")}` : ""}`]));
   if (mod.trailingComments.length) lines.push("", ...mod.trailingComments);
@@ -540,7 +545,7 @@ export function migrateMod(mod: Extract<SkillMod, { version: 1 }>, filename: str
     if (prior) { prior.selectors.push(...selectors); prior.comments.push(...requirement.comments); }
     else requires.set(requirement.ref, { ...requirement, selectors, comments: [...requirement.comments] });
   }
-  const skips: Skip[] = [];
+  const skips: AgentSelection[] = [];
   const agentComments: Comments = [];
   for (const harness of Object.values(mod.harnesses)) {
     agentComments.push(...harness.comments);
@@ -571,7 +576,7 @@ export function migrateMod(mod: Extract<SkillMod, { version: 1 }>, filename: str
     }
     return [setup.name, { ...setup, comments }];
   }));
-  const next: SkillMod2 = { ...mod, version: 2, requires: [...requires.values()], agents: { ids, comments: agentComments }, skips, setups, fieldOverrides: [], trailingComments: [] };
+  const next: SkillMod2 = { ...mod, version: 2, requires: [...requires.values()], agents: { ids, comments: agentComments }, skips, only: [], setups, fieldOverrides: [], trailingComments: [] };
   const emitted = formatMod2(next).split("\n");
   for (const comment of mod.leadingComments) {
     const index = emitted.indexOf(comment);

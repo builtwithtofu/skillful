@@ -27,6 +27,8 @@ use github:angular/skills@main { angular-developer angular-new-app }
 
 agents claude pi codex
 
+only angular-developer on pi "Uses Pi tools."
+
 skip angular-new-app on codex "Only scaffold in Claude Code and Pi."
 
 machine work-mac
@@ -35,7 +37,10 @@ machine personal skip angular-developer angular-new-app
 
 `local` takes the skill root, then the command root. `use` names the exact skills
 from a `github:`, `git:`, or `path:` source. Each declared agent gets every
-selected skill except those skipped for that agent or the chosen machine.
+selected skill unless it is skipped for that agent or machine, or restricted by
+`only <skills> on <agents> "reason"`. An `only` line limits delivery to the named
+agents without adding them to the machine. Multiple `only` lines for the same
+skill combine their agent lists; `skip` still excludes a skill.
 Unknown directives, agents, or skill names are errors with a line number; skill
 names are checked when resolving sources (`check` or `render`), not during `fmt`.
 Replace a skill's front-matter field with `<skill>.<field> = "…"`, or add text
