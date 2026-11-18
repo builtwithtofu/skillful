@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverProject, initProject, ProjectError } from "./project.ts";
@@ -21,7 +21,7 @@ describe("project discovery", () => {
     mkdirSync(join(inner, "nested"), { recursive: true });
     writeFileSync(join(outer, "skill.mod"), "skillful 1\n");
     writeFileSync(join(inner, "skill.mod"), "skillful 1\nskills ./local\n");
-    expect(discoverProject({ cwd: join(inner, "nested") }).root).toBe(inner);
+    expect(discoverProject({ cwd: join(inner, "nested") }).root).toBe(realpathSync(inner));
   });
 
   test("--project overrides discovery and requires a manifest", () => {
@@ -29,7 +29,7 @@ describe("project discovery", () => {
     const project = join(root, "project");
     mkdirSync(project);
     writeFileSync(join(project, "skill.mod"), "skillful 1\n");
-    expect(discoverProject({ cwd: root, project }).root).toBe(project);
+    expect(discoverProject({ cwd: root, project }).root).toBe(realpathSync(project));
     expect(() => discoverProject({ cwd: root, project: join(root, "missing") })).toThrow(ProjectError);
   });
 

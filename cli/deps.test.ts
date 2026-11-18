@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { addDependency, cachedDependencyPaths, fetchDependencies, parseRef, updateDependencies } from "./deps.ts";
@@ -170,7 +170,7 @@ describe("dependency transactions and cache", () => {
     await addDependency(discoverProject({ project }), "path:../dependency", { name: "local" });
 
     expect(existsSync(join(project, "skill.lock"))).toBe(false);
-    expect(cachedDependencyPaths(discoverProject({ project })).local).toBe(dependency);
+    expect(cachedDependencyPaths(discoverProject({ project })).local).toBe(realpathSync(dependency));
     const before = readFileSync(join(project, "skill.mod"), "utf8");
     await expect(addDependency(discoverProject({ project }), "path:../..", { name: "outside" })).rejects.toThrow("escapes the source root");
     expect(readFileSync(join(project, "skill.mod"), "utf8")).toBe(before);
