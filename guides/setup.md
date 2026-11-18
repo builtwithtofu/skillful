@@ -1,7 +1,12 @@
 # setup
 
-A setup names the skill selection, harness outputs, root kind, and path exceptions
-for one machine. Skillful never chooses a setup from the hostname.
+A setup names a configuration for one machine. Skillful never chooses one from
+the hostname. In skillful 2, `machine personal skip company-database` uses the
+listed `agents` and skips that skill for all of them. Use `render personal` or
+`setup show personal` to select it.
+
+Skillful 1 uses setup blocks for skill selection, harness outputs, root kind,
+and path exceptions:
 
 ```text
 setup personal (

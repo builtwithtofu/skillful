@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { cacheKey } from "./nar.ts";
 
 const dirs: string[] = [];
@@ -195,6 +195,130 @@ setup work-mac (
     expect(readFileSync(mod, "utf8")).toContain("omit-command a");
   });
 
+  test("fmt canonicalizes skillful 2 without changing its version or losing the description line", () => {
+    const root = temp();
+    const mod = join(root, "skill.mod");
+    const original = `// Project
+skillful   2
+machine work
+  agents     claude pi
+local   ./my-skills "./my commands"
+rules ./rules.md
+// Upstream skills
+use git:https://example.invalid/tool.git@main#skills{tool}
+use github:angular/skills@main { angular-developer  angular-new-app }
+angular-developer.description="Custom description."
+skip angular-new-app   on  pi  "Only use \\"Claude\\"."
+machine personal  skip    tool
+`;
+    writeFileSync(mod, original);
+    expect(run(root, "fmt", "--check").exitCode).toBe(1);
+    expect(readFileSync(mod, "utf8")).toBe(original);
+    expect(run(root, "fmt").exitCode).toBe(0);
+    expect(readFileSync(mod, "utf8")).toBe(`// Project
+skillful 2
+
+local ./my-skills "./my commands"
+rules ./rules.md
+
+// Upstream skills
+use git:https://example.invalid/tool.git@main#skills { tool }
+use github:angular/skills@main { angular-developer angular-new-app }
+
+angular-developer.description = "Custom description."
+
+agents claude pi
+
+skip angular-new-app on pi "Only use \\"Claude\\"."
+
+machine work
+machine personal skip tool
+`);
+    expect(run(root, "fmt", "--check").exitCode).toBe(0);
+  });
+
+  test("skillful 2 delivers the same files as skillful 1 with agent and machine skips", () => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    renameSync(join(root, "skills"), join(root, "local-skills"));
+    const example = join(root, "local-skills", "example", "SKILL.md");
+    writeFileSync(example, readFileSync(example, "utf8").replace("{{audience}}", "each agent"));
+    renameSync(join(root, "commands"), join(root, "prompts"));
+    renameSync(join(root, "rules", "global_agents.md"), join(root, "rules.md"));
+    for (const name of ["foreign", "unselected"]) {
+      const skill = join(root, "upstream", name);
+      mkdirSync(skill, { recursive: true });
+      writeFileSync(join(skill, "SKILL.md"), `---\nname: ${name}\ndescription: From the dependency.\n---\n`);
+    }
+    const mod = join(root, "skill.mod");
+    writeFileSync(mod, `skillful 1
+skills ./local-skills
+commands ./prompts
+rules ./rules.md
+require path:./upstream as dep (
+  only foreign
+)
+harness claude (
+  omit-skill hidden "Pi only."
+)
+harness pi (
+)
+setup work (
+  claude pi
+)
+setup personal (
+  omit-skill foreign "Work only."
+  omit-skill example "Work only."
+  claude pi
+)
+`);
+    const targets = [[], ["work"], ["personal"]];
+    for (const [i, args] of targets.entries()) {
+      const result = run(root, "render", ...args, "--out", `v1-${i}`);
+      expect(result.exitCode, output(result).stderr).toBe(0);
+    }
+    writeFileSync(mod, `skillful 2
+local ./local-skills ./prompts
+rules ./rules.md
+use path:./upstream { foreign }
+agents claude pi
+skip hidden on claude "Pi only."
+machine work
+machine personal skip foreign example
+`);
+    const delivered = (dir: string) => Object.fromEntries(readdirSync(dir, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.parentPath.endsWith(".skillful"))
+      .map((entry) => {
+        const path = join(entry.parentPath, entry.name);
+        return [relative(dir, path), readFileSync(path)];
+      }));
+    for (const [i, args] of targets.entries()) {
+      const result = run(root, "render", ...args, "--out", `v2-${i}`);
+      expect(result.exitCode, output(result).stderr).toBe(0);
+      const before = join(root, `v1-${i}`);
+      const after = join(root, `v2-${i}`);
+      expect(delivered(after)).toEqual(delivered(before));
+    }
+  });
+
+  test.each([
+    ["bogus value", 'unknown directive "bogus"'],
+    ["agents claude imaginary", 'unknown agent "imaginary"'],
+    ['skip example on imaginary "reason"', 'unknown agent "imaginary"'],
+    ["use path:./commands { example }", "unknown skill example in use"],
+    ['skip missing on pi "reason"', "unknown skill missing in skip"],
+    ["machine laptop skip missing", "unknown skill missing in machine laptop"],
+    ['missing.description = "value"', "unknown skill missing in description override"],
+  ])("skillful 2 reports the line for %s", (directive, message) => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    writeFileSync(join(root, "skill.mod"), `skillful 2\n\n${directive}\n${directive.startsWith("agents ") ? "" : "agents pi\n"}`);
+    const result = run(root, "render");
+    expect(result.exitCode).toBe(1);
+    expect(output(result).stderr).toMatch(/skill\.mod:3:\d+:/);
+    expect(output(result).stderr).toContain(message);
+    expect(existsSync(join(root, "rendered"))).toBe(false);
+  });
   test("unknown command options are usage errors", () => {
     const root = temp();
     const unknown = run(root, "fmt", "--harness", "pi");

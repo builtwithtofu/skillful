@@ -12,6 +12,7 @@ person can invoke. See: skillful skills show author.
 
 Only install writes live harness destinations. add and update resolve revisions;
 fetch retrieves exact pins. check, inspect, render, and install never resolve.
+skill.mod accepts skillful 1 and skillful 2; see: skillful skills show mod.
 
 Getting oriented
   skillful skills tree
@@ -44,6 +45,7 @@ Afterward:
 
 export const FMT_AFTER_HELP = `
 Use --check in CI or before a review. Omit it to rewrite skill.mod in place.
+Both skillful 1 and skillful 2 keep their existing version.
 
 Examples:
   skillful fmt --check
@@ -60,6 +62,8 @@ For an existing require, pass its name; skill.mod supplies the ref, alias, and
 
 New GitHub refs default to @HEAD, the repository's default branch. Without --name, the repository or subdirectory
 name is used. Omit selectors to include the whole tree.
+For skillful 2, pass the use ref; a new use needs --only for each skill and
+accepts neither --name nor --exclude.
 
 Examples:
   skillful add agent-browser
@@ -75,6 +79,7 @@ Afterward:
 export const FETCH_AFTER_HELP = `
 Never changes skill.lock. Named fetches are independent of unrelated project
 readiness. Use update to create or move a pin.
+For skillful 2, pass a use ref to fetch just its pin.
 
 Examples:
   skillful fetch
@@ -85,6 +90,8 @@ export const UPDATE_AFTER_HELP = `
 Uses declarations in skill.mod and never edits them. A named update creates or
 replaces that dependency's pin without requiring unrelated pins. With no names,
 update resolves every remote dependency before replacing the lock atomically.
+For skillful 2, pass a use ref for one dependency, or run bare update after
+editing the ref in skill.mod to replace its old pin.
 
 Examples:
   skillful update
@@ -92,9 +99,10 @@ Examples:
 `;
 
 export const RENDER_AFTER_HELP = `
-Default rendering reconciles only harnesses declared in skill.mod. A named setup
-reconciles its exact set; --harness updates only the named outputs and preserves
-other managed renders. Live harness destinations are install.
+By default, render uses the agents in skillful 2 or the declared harnesses in
+skillful 1. Name a machine or setup to apply its skill selection. --harness
+updates only the named outputs and preserves other managed renders. Only install
+writes live harness destinations.
 
 Examples:
   skillful render --dry-run
@@ -124,9 +132,9 @@ Examples:
 `;
 
 export const SETUP_AFTER_HELP = `
-A setup declares selected skills, harness outputs, root kind, and path exceptions
-in skill.mod. Its root selects each harness's home or project paths. Showing one
-is read-only.
+A skillful 2 machine uses the declared agents and can skip skills for that machine.
+A skillful 1 setup can also select a root and override destination paths. Showing
+one is read-only.
 
 Examples:
   skillful list setups

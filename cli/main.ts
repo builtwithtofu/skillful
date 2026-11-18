@@ -163,7 +163,7 @@ export function createProgram() {
     .summary("Add or lock one dependency; resolve and fetch remote refs")
     .description("Add a new dependency, or lock one already declared in skill.mod, then fetch its exact tree.")
     .addHelpText("after", ADD_AFTER_HELP)
-    .argument("<dependency>", "existing dependency name or github:, git:, or path: reference")
+    .argument("<dependency>", "dependency name or github:, git:, or path: reference")
     .addOption(new Option("--name <name>", "dependency alias").argParser(collect))
     .addOption(new Option("--only <skill>", "include only this skill; repeatable").argParser(collect))
     .addOption(new Option("--exclude <skill>", "exclude this skill; repeatable").argParser(collect))
@@ -178,7 +178,7 @@ export function createProgram() {
     .summary("Fetch exact pins without changing skill.lock")
     .description("Fetch and verify selected or all existing pins without changing skill.lock.")
     .addHelpText("after", FETCH_AFTER_HELP)
-    .argument("[names...]", "dependency names; default: all")
+    .argument("[dependencies...]", "dependency names or use refs; default: all")
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
     .action(async (names: string[], options: { project?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project") });
@@ -190,7 +190,7 @@ export function createProgram() {
     .summary("Resolve and fetch one or more declared dependencies")
     .description("Create or replace selected dependency pins from skill.mod; default: reconcile every remote dependency.")
     .addHelpText("after", UPDATE_AFTER_HELP)
-    .argument("[names...]", "dependency names; default: all remotes")
+    .argument("[dependencies...]", "dependency names or use refs; default: all remotes")
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
     .action(async (names: string[], options: { project?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project") });
@@ -254,7 +254,7 @@ export function createProgram() {
     .summary("Write a managed build tree; touches no harnesses")
     .description("Render a managed build tree without installing it.")
     .addHelpText("after", RENDER_AFTER_HELP)
-    .argument("[setup]", "named setup; omit to render harnesses declared in skill.mod")
+    .argument("[setup]", "named setup or machine; omit to use the default agents")
     .addOption(new Option("--harness <harness>", "render only this harness; repeatable").argParser(collect))
     .addOption(new Option("--out <directory>", "managed output directory (default: ./rendered)").argParser(collect))
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))

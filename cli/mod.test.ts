@@ -95,7 +95,7 @@ setup work-mac (
   });
   test.each([
     ["missing header", "skills ./skills", "first semantic directive"],
-    ["unknown version", "skillful 2", "unsupported skillful version"],
+    ["unknown version", "skillful 3", "unsupported skillful version"],
     ["unknown directive", "skillful 1\nwat nope", "unknown directive"],
     ["duplicate root", "skillful 1\nskills ./a\nskills ./b", "may appear at most once"],
     ["unknown harness", "skillful 1\nharness nope (\n)", "unknown harness"],
