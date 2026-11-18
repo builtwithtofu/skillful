@@ -2,10 +2,11 @@
 
 Render a managed build tree. By default, render uses the agents in skillful 2 or
 the declared harnesses in skillful 1. Name a machine or setup to apply its skill
-selection. In skillful 2, identical skills for Codex, Grok, Pi, OpenCode and
-Cursor share `.agents/skills`. If a skill differs or is skipped, only the agents
-that use it get their own copies. Claude Code uses `.claude/skills`. Skillful 1
-continues to render skills in `<harness>/skills`.
+selection. In skillful 2, a skill goes in `.agents/skills` only when at least two
+shared-folder agents (Codex, Grok, Pi, OpenCode, or Cursor) get the same copy.
+Skills for a lone reader, or skills that differ or are skipped, use the receiving
+agents' own folders. Claude Code always uses `.claude/skills`. Skillful 1 continues
+to render skills in `<harness>/skills`.
 
 `--harness` refreshes the named outputs. In skillful 2 it can also regroup the
 skills of already-rendered shared-folder agents and refresh their skill contracts,

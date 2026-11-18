@@ -245,7 +245,8 @@
               skillful render travel --project ${self}/tests/fixtures/machine-project --source-root ${self} \
                 --override "github:angular/skills@main=${githubTree.outPath}" --out "$TMPDIR/travel-cli"
               diff -r ${travelSetup.rendered} "$TMPDIR/travel-cli"
-              test -f ${travelSetup.rendered}/.agents/skills/angular-developer/SKILL.md
+              test -f ${travelSetup.rendered}/.pi/agent/skills/angular-developer/SKILL.md
+              test ! -e ${travelSetup.rendered}/.agents/skills
               test ! -e ${travelSetup.rendered}/.claude/skills/angular-developer
               test -f ${travelSetup.rendered}/.claude/skills/local/SKILL.md
               test ! -e ${travelSetup.rendered}/.agents/skills/desk-only

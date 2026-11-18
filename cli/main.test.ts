@@ -18,7 +18,7 @@ function piClaudeRenderFiles(dir: string) {
     .map((entry) => {
       const path = join(entry.parentPath, entry.name);
       const name = relative(dir, path).replaceAll("\\", "/")
-        .replace(/^\.claude\//, "claude/").replace(/^\.agents\//, "pi/");
+        .replace(/^\.claude\//, "claude/").replace(/^\.pi\/agent\//, "pi/");
       return [name, readFileSync(path)];
     }));
 }
@@ -85,6 +85,22 @@ describe("project CLI", () => {
     expect(existsSync(shared)).toBe(false);
     expect(existsSync(join(home, ".codex/skills/example/SKILL.md"))).toBe(false);
     expect(existsSync(join(home, ".claude/skills/example/SKILL.md"))).toBe(false);
+  });
+
+  test("a Pi-only machine moves formerly shared skills into Pi's own folder", () => {
+    const { project, home } = machineFixture();
+    const install = () => runIn(project, home, "install", "desk");
+    const shared = join(home, ".agents/skills");
+    expect(install().exitCode).toBe(0);
+    expect(existsSync(join(shared, "example/SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".pi/agent/skills/example"))).toBe(false);
+    expect(existsSync(join(home, ".codex/skills/example"))).toBe(false);
+
+    writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi\nmachine desk\n");
+    const result = install();
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    expect(existsSync(shared)).toBe(false);
+    expect(readFileSync(join(home, ".pi/agent/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
   });
 
   test("render and install honor a skip for a shared reader outside the agents list", () => {
@@ -178,11 +194,11 @@ angular-developer.when_to_use = "On Angular projects"
     const result = run(root, "render");
     expect(result.exitCode, output(result).stderr).toBe(0);
     const rendered = (folder: string) => readFileSync(join(root, "rendered", folder, "skills", "angular-developer", "SKILL.md"), "utf8");
-    expect(rendered(".agents")).toContain("description: Angular guidance Not for other frontends. Pi only.\n");
+    expect(rendered(".pi/agent")).toContain("description: Angular guidance Not for other frontends. Pi only.\n");
     expect(rendered(".claude")).toContain("description: Angular guidance Not for other frontends.\n");
     expect(rendered(".claude")).toContain("when_to_use: On Angular projects");
-    expect(rendered(".agents")).not.toContain("when_to_use");
-    expect(rendered(".agents")).toEndWith("\n\nOriginal instructions.\n");
+    expect(rendered(".pi/agent")).not.toContain("when_to_use");
+    expect(rendered(".pi/agent")).toEndWith("\n\nOriginal instructions.\n");
     expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toContain("description: Upstream");
   });
 

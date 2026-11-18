@@ -489,7 +489,7 @@ function skillPlacements(mod: Project["mod"], skills: ReadonlyMap<HarnessId, Ski
   }
   for (const group of candidates.values()) {
     const first = group[0]!.skill;
-    if (group.length !== readers.length || !group.every(({ skill }) => skill.sha256 === first.sha256 &&
+    if (group.length < 2 || group.length !== readers.length || !group.every(({ skill }) => skill.sha256 === first.sha256 &&
       skill.supportFiles.length === first.supportFiles.length && skill.supportFiles.every((file, i) =>
         file.relativePath === first.supportFiles[i]!.relativePath && file.sha256 === first.supportFiles[i]!.sha256))) continue;
     for (const placement of group) {
