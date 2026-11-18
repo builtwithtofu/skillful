@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 import { readFileSync, writeFileSync } from "node:fs";
 import { Argument, Command, CommanderError, Option } from "commander";
-import { resolveSkills } from "./contract.ts";
-import { addDependency, cachedDependencyPaths, fetchDependencies, updateDependencies } from "./deps.ts";
+import { addDependency, fetchDependencies, migrateProject, updateDependencies } from "./deps.ts";
 import { normalizeHarness } from "./harness.ts";
 import {
   ADD_AFTER_HELP,
@@ -22,8 +21,7 @@ import {
 } from "./help.ts";
 import { installProject, installSetup, removeSetup, type InstallPaths } from "./install.ts";
 import { checkCommand, diffCommand, inspectCommand, listCommand, manifestCommand, schemaCommand, setupShowCommand, type OutputFormat } from "./introspect.ts";
-import { readLock, validateLock } from "./lock.ts";
-import { formatText, migrateMod, type HarnessId } from "./mod.ts";
+import { formatText, type HarnessId } from "./mod.ts";
 import { discoverProject, initProject } from "./project.ts";
 import { renderProject } from "./render.ts";
 import { renderSkillTopic, resolveSkillTopic, skillTree } from "./skills.ts";
@@ -164,15 +162,13 @@ export function createProgram() {
 
   program.command("migrate")
     .summary("Rewrite skill.mod from skillful 1 to skillful 2")
-    .description("Rewrite skill.mod in place without changing skill.lock or installing anything.")
+    .description("Rewrite skill.mod in place, retaining only the pins still needed, without installing anything.")
     .addHelpText("after", MIGRATE_AFTER_HELP)
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
-    .action((options: { project?: string[] }) => {
+    .action(async (options: { project?: string[] }) => {
       const project = discoverProject({ project: one(options.project, "--project") });
-      const migrated = migrateMod(project.mod, project.modPath, () => resolveSkills(project, cachedDependencyPaths(project)));
+      const migrated = await migrateProject(project);
       if (!migrated) { console.log(`${project.modPath} is already skillful 2`); return; }
-      validateLock(migrated.mod, readLock(project.root, false));
-      writeFileSync(project.modPath, migrated.text);
       for (const warning of migrated.warnings) console.error(`Warning: ${warning}`);
       console.log(`Migrated ${project.modPath} to skillful 2`);
     });
