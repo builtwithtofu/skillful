@@ -476,7 +476,6 @@ function buildAuthoredSkills(project: Project, id: HarnessId, facts: HarnessFact
 function skillPlacements(mod: Project["mod"], skills: ReadonlyMap<HarnessId, SkillPlan[]>, readsShared: (id: HarnessId) => boolean) {
   const readers = [...skills.keys()].filter(readsShared);
   const privateSkills = new Set(mod.version === 2 ? [
-    ...mod.only.flatMap(({ skills }) => skills),
     ...mod.skips.filter(({ agents }) => agents.some(readsShared)).flatMap(({ skills }) => skills),
   ] : []);
   const placements: SkillPlacement[] = [];
@@ -581,10 +580,10 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
 
 export function resolvePlan(project: Project, options: ResolveOptions = {}, previouslyRendered: HarnessId[] = []): ProjectPlan {
   const setup = options.setup ? setupFor(project, options.setup) : null;
-  const selected = [...new Set(setup
-    ? setup.harnesses.map((harness) => harness.id)
-    : options.harnesses?.length
-      ? options.harnesses
+  const selected = [...new Set(options.harnesses?.length
+    ? options.harnesses
+    : setup
+      ? setup.harnesses.map((harness) => harness.id)
       : project.mod.version === 2
         ? project.mod.agents.ids
         : HARNESS_IDS.filter((id) => project.mod.harnesses[id] !== undefined))];
@@ -625,8 +624,8 @@ export function resolvePlan(project: Project, options: ResolveOptions = {}, prev
     harnesses[id] = plan;
     skills.set(id, plan.skills);
   }
-  if (mod.version === 2 && !setup && options.harnesses?.some(readsShared)) {
-    for (const id of [...mod.agents.ids, ...previouslyRendered]) {
+  if (mod.version === 2 && options.harnesses?.some(readsShared)) {
+    for (const id of [...(setup?.harnesses.map(({ id }) => id) ?? mod.agents.ids), ...previouslyRendered]) {
       if (!readsShared(id) || skills.has(id)) continue;
       const omitted = skillOmissions(project, id, entries.setupOmissions);
       const resolved = profile(id);

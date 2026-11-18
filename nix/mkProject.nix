@@ -190,6 +190,7 @@ let
       let
         setup = setupDeclarations.${name};
         shareSkills = manifest.version == 2 && builtins.length (builtins.filter (harness: harness.readsShared) setup.harnesses) >= 2;
+        hasRules = manifest.version == 1 || manifest.explicitRules || builtins.pathExists (checkedProjectRoot + "/rules/global_agents.md");
         resolvedHarnesses = map (harness:
           if manifest.version == 2 then harness
           else if facts.${harness.name}.commandMerge == "skill" && harness.paths ? commands
@@ -215,7 +216,7 @@ let
           source = if manifest.version == 1
             then "${setupRendered}/${harness.name}/${if category == "rules" then "rules.md" else category}"
             else "${deployed}/${destination}";
-        }) harness.paths) resolvedHarnesses ++ lib.optional shareSkills {
+        }) (lib.filterAttrs (category: _: category != "rules" || hasRules) harness.paths)) resolvedHarnesses ++ lib.optional shareSkills {
           category = "skills";
           destination = ".agents/skills";
           harness = null;

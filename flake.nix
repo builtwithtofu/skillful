@@ -80,6 +80,8 @@
           '') setup.files));
           personalHome = consumeSetup "personal" personalSetup;
           workProject = consumeSetup "work-mac" workSetup;
+          noRulesSetup = (mkProject { inherit pkgs; source = self; projectDir = "tests/fixtures/no-rules-machine"; }).forSetup "desk";
+          noRulesHome = consumeSetup "no-rules" noRulesSetup;
           parseSetupMod = import ./nix/parseMod.nix {
             lib = pkgs.lib;
             facts = { claude = { }; opencode = { }; pi = { }; };
@@ -259,6 +261,10 @@
               test -f ${travelSetup.files.".pi/agent/GENERAL.md".source}
               test -f ${deskSetup.files.".claude/CLAUDE.md".source}
 
+              test -f ${noRulesHome}/.agents/skills/example/SKILL.md
+              test -f ${noRulesHome}/.claude/skills/example/SKILL.md
+              test ! -e ${noRulesHome}/.claude/CLAUDE.md
+              test ! -e ${noRulesHome}/.pi/agent/AGENTS.md
               for project in ${./tests/fixtures/setup-mod/unsafe} ${./tests/fixtures/setup-mod/mixed} ${./tests/fixtures/setup-mod/root-home}; do
                 if skillful fmt --check --project "$project"; then exit 1; fi
               done

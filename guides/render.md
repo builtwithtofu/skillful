@@ -8,10 +8,12 @@ Skills for a lone reader, or skills that differ or are skipped, use the receivin
 agents' own folders. Claude Code always uses `.claude/skills`. Skillful 1 continues
 to render skills in `<harness>/skills`.
 
-`--harness` refreshes the named outputs. In skillful 2 it can also regroup the
-skills of already-rendered shared-folder agents and refresh their skill contracts,
-without touching commands or rules. Only `install` writes live harness destinations.
-`--dry-run` first.
+`--harness` refreshes the named outputs. Select a built-in or top-level declared
+agent. In skillful 2 it can also regroup already-rendered skills in the same
+machine layout and refresh their contracts without touching commands or rules.
+If a partial render would remove a skill a retained agent still uses, run a full
+render without `--harness`, naming the machine if applicable.
+Only `install` writes live harness destinations. `--dry-run` first.
 
 Not `inspect` (that does not write). Not a substitute for editing sources.
 
@@ -29,8 +31,13 @@ independent. `--path` installs one public harness into a nonstandard layout. An
 OpenCode install at retired `opencode-v2` paths adopts that receipt and migrates
 unchanged stale files. `--force` never permits an escape, takes files through
 another path, receipt, or symlink alias, or deletes a changed stale file.
-A one-off skillful 2 install refuses to duplicate an owned shared skill. Rerun
-the machine install to switch layouts.
+A skillful 2 machine install takes over earlier one-agent installs for its agents
+from the same project and destination root. It refuses to install a private copy
+for a shared-folder agent if another installation owns that skill in `.agents/skills`.
+It also refuses to publish a shared copy if another installation in the same
+root owns a private copy in a shared reader's skills path.
+`--harness` on install is skillful 1 only.
+After an interrupted install, follow the lock recovery instructions and rerun `install`.
 `install <setup> --remove` rejects `--force` and retires only unchanged files
 from that setup's receipt. A named render contains only that setup's selected
 skills and harness outputs.

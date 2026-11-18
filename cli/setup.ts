@@ -28,9 +28,9 @@ export function resolveSetup(project: Project, name: string, options: ResolveOpt
   const sharedSkills = plan.placements.some(({ root }) => root === ".agents") ? sharedSkillsPath : undefined;
   const harnesses = setup.harnesses.map(({ id, paths }) => ({
     name: id,
-    paths: v2 ? resolveInstallPaths(harnessPlan(plan, id).facts) : resolveInstallPaths(facts[id as BuiltinHarnessId], paths, setup.root),
+    paths: v2 ? resolveInstallPaths(harnessPlan(plan, id).facts, undefined, setup.root, Boolean(harnessPlan(plan, id).rules.delivery)) : resolveInstallPaths(facts[id as BuiltinHarnessId], paths, setup.root),
   }));
-  const destinations = harnesses.flatMap((harness) => Object.values(harness.paths));
+  const destinations = harnesses.flatMap(({ paths }) => Object.values(paths));
   if (sharedSkills) destinations.push(sharedSkills);
   for (const [index, left] of destinations.entries()) for (const right of destinations.slice(index + 1)) {
     if (pathConflict(left, right)) fail(`setup ${name} has overlapping destinations: ${left} and ${right}`, "Choose harness paths that do not share a destination region.");
@@ -50,7 +50,7 @@ export function resolveSetup(project: Project, name: string, options: ResolveOpt
       }
     }
     if (output.paths.commands) for (const command of harness.commands) add(join(output.paths.commands, command.name).replaceAll("\\", "/"), output.name, `${output.name}/commands/${command.name}`);
-    if (output.paths.rules && (!v2 || harness.rules.delivery)) add(output.paths.rules, output.name, `${output.name}/rules.md`);
+    if (output.paths.rules) add(output.paths.rules, output.name, `${output.name}/rules.md`);
   }
   return {
     name,
