@@ -131,6 +131,9 @@ function commandSource(entry: CommandEntry): Source {
     ? { kind: "standalone", origin: "canonical", path: `commands/${entry.name}` }
     : { kind: "external", origin: entry.origin, path: `external/${entry.origin}/${entry.name}` };
 }
+function commandLocation(project: Project, entry: CommandEntry) {
+  return entry.sourceKind === "standalone" ? relative(project.root, join(entry.root, entry.name)) : commandSource(entry).path!;
+}
 function uniqueByName<T extends { name: string; origin: string }>(entries: T[], kind: string) {
   const grouped = new Map<string, T[]>();
   for (const entry of entries) grouped.set(entry.name, [...(grouped.get(entry.name) ?? []), entry]);
@@ -165,42 +168,52 @@ function skillDocument(mod: SkillMod, raw: string, id: HarnessId, source: string
   const lines = raw.split("\n");
   const end = frontmatterEnd(lines, true);
   const yaml = end === null ? "" : lines.slice(1, end).join("\n");
-  const projected = applyBlocks(mod, id, yaml, source);
+  if (mod.version === 2 && end !== null) rejectBraceFrontmatter(lines, end, source, "skill");
+  const projected = mod.version === 1 ? applyBlocks(mod, id, yaml, source) : yaml;
   const document = parseDocument(projected);
   if (document.errors.length) fail(`invalid YAML frontmatter: ${document.errors[0]!.message}`, "Fix the frontmatter and retry.");
   return { document, body: end === null ? raw : lines.slice(end + 1).join("\n") };
 }
 
-function applyFieldOverrides(project: Project, entry: SkillEntry, id: HarnessId, raw: string) {
-  if (project.mod.version !== 2) return raw;
+function applyFieldOverrides(project: Project, entry: SkillEntry, id: HarnessId, raw: string, source: string) {
+  if (project.mod.version !== 2) return { text: raw };
   const overrides = project.mod.fieldOverrides.filter((item) => item.skill === entry.name);
   const applicable = [...overrides.filter((item) => !item.agent), ...overrides.filter((item) => item.agent === id)];
-  if (!applicable.length) return raw;
-  const upstreamBody = bodyOf(raw, true);
+  if (!applicable.length) return { text: raw };
+  const lines = raw.split("\n");
+  const startLine = (frontmatterEnd(lines, true) ?? -1) + 1;
+  const upstreamBody = lines.slice(startLine).join("\n");
+  const bodyOverrideLines: number[] = [];
   let body = upstreamBody;
-  const document = applicable.some((item) => item.field !== "body") ? skillDocument(project.mod, raw, id, entry.name).document : null;
+  const document = applicable.some((item) => item.field !== "body") ? skillDocument(project.mod, raw, id, source).document : null;
   const readValue = (value: FieldOverride["value"]) => value.kind === "string" ? value.text : readFileSync(resolveProjectPath(project, value.text, "file"), "utf8");
   for (const item of applicable) {
+    const value = readValue(item.value);
+    const at = `${project.modPath}:${item.line}`;
+    if (item.field === "body") bodyOverrideLines.push(item.line);
+    else if (LEGACY_MARKUP.test(value)) braceFrontmatterError(at, "skill", false);
     if (item.operation === "replace") {
       const match = readValue(item.match);
       const start = body.indexOf(match);
       if (!match || start < 0 || body.indexOf(match, start + 1) >= 0) {
         const pin = entry.sourceKind === "canonical" || entry.sourceKind === "extra" ? undefined : readLock(project.root, false).find(({ ref }) => ref === entry.origin);
-        fail(`${project.modPath}:${item.line}: ${item.skill}.body.replace${item.agent ? ` on ${item.agent}` : ""} expected ${JSON.stringify(item.match.text)} exactly once (${pin ? `locked revision ${pin.rev}` : "no locked revision"})`, "Use text that occurs exactly once in the skill body at this override, or remove the override.");
+        fail(`${at}: ${item.skill}.body.replace${item.agent ? ` on ${item.agent}` : ""} expected ${JSON.stringify(item.match.text)} exactly once (${pin ? `locked revision ${pin.rev}` : "no locked revision"})`, "Use text that occurs exactly once in the skill body at this override, or remove the override.");
       }
-      body = body.slice(0, start) + readValue(item.value) + body.slice(start + match.length);
+      body = body.slice(0, start) + value + body.slice(start + match.length);
     } else if (item.field === "body") {
-      const value = readValue(item.value);
       body = item.operation === "append" ? body + value : value;
     } else {
-      const value = readValue(item.value);
       const old = document!.get(item.field);
       document!.set(item.field, item.operation === "append" ? (old == null ? "" : String(old)) + value : value);
     }
   }
-  if (document) return `---\n${document.toString({ lineWidth: 0 })}---\n${body}`;
+  const directives = bodyOverrideLines.sort((a, b) => a - b).join(", ");
+  const bodyLocation = directives
+    ? () => `${source} (after skill.mod overrides at lines ${directives})`
+    : (line: number) => `${source}:${startLine + line}`;
+  if (document) return { text: `---\n${document.toString({ lineWidth: 0 })}---\n${body}`, bodyLocation };
   const prefix = raw.slice(0, raw.length - upstreamBody.length).replaceAll("\r\n", "\n");
-  return prefix + (prefix && body && !prefix.endsWith("\n") ? "\n" : "") + body;
+  return { text: prefix + (prefix && body && !prefix.endsWith("\n") ? "\n" : "") + body, bodyLocation };
 }
 function bodyOf(text: string, crlf = false) {
   const lines = text.split("\n");
@@ -247,19 +260,161 @@ function fenceTransforms(mod: SkillMod, id: HarnessId, text: string): Transforma
     return [{ kind: "fence" as const, mode: include ? "include" as const : "exclude" as const, targets, outcome: ((include && listed) || (!include && !listed)) ? "selected" as const : "omitted" as const }];
   });
 }
-// Code blocks and spans show markup as written, so examples of fences, tokens and $@ survive rendering.
-// Hiding it character-for-character keeps line numbers for error locations.
-const CODE = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[ \t]*$|`[^`\n]+`/gm;
+const LEGACY_CODE = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[ \t]*$|`[^`\n]+`/gm;
+const MARKDOWN_TOKENS = /^[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?(?:(`{3,})[^`\r\n]*|(~{3,})[^\r\n]*)\r?$|^[ \t]*\r?$|<!--|\\[\\`]|`+/gm;
 const HIDDEN_MARKUP: ReadonlyArray<readonly [string, string]> = [["{{", "\uE000"], ["}}", "\uE001"], ["$@", "\uE002"]];
-function hideCodeMarkup(text: string) {
-  return text.replace(CODE, (code) => HIDDEN_MARKUP.reduce((value, [markup, hidden]) => value.replaceAll(markup, hidden), code));
+const COMMENT_OPEN = "\uE003";
+const DIRECTIVE = /^<!--[^\S\r\n]*(?:(?:only|skip)(?=\s|-->|$)|end(?=\s*-->))/;
+const COMMENT_FENCE = /^\s*<!--\s*(only|skip|end)(?=\s|-->)((?:(?!-->)[^\r\n])*)-->\s*$/;
+// V1 also accepts JSON-quoted token names, with no restriction on the decoded text.
+const LEGACY_MARKUP = /\{\{[^\r\n]*?\}\}/;
+type MarkdownKind = "skill" | "command" | "rules";
+function braceFrontmatterError(at: string, kind: MarkdownKind, migrating: boolean): never {
+  const override = '<skill>.<field> on <agent> = "value"';
+  const literal = "Remove the brace markup. For a token, write its literal value.";
+  const hint = kind === "skill" ? migrating
+    ? ` Run skillful migrate, then add ${override} in the skillful 2 skill.mod if needed.`
+    : ` For agent-specific skill frontmatter, use ${override} in skill.mod.` : migrating ? " Then run skillful migrate." : "";
+  fail(`${at}: ${migrating ? "cannot migrate legacy brace markup in frontmatter" : "legacy brace markup is not supported in skillful 2 frontmatter"}`, literal + hint);
+}
+function rejectBraceFrontmatter(lines: string[], end: number, source: string, kind: MarkdownKind, migrating = false) {
+  const yaml = lines.slice(1, end).join("\n");
+  const match = LEGACY_MARKUP.exec(yaml);
+  if (match) braceFrontmatterError(`${source}:${lineAt(yaml, match.index) + 1}`, kind, migrating);
+}
+const COMMENT_FORMS = "<!-- only AGENT … -->, <!-- skip AGENT … -->, or <!-- end -->";
+function hideMarkup(text: string) {
+  return HIDDEN_MARKUP.reduce((value, [markup, hidden]) => value.replaceAll(markup, hidden), text);
 }
 function showCodeMarkup(text: string) {
   return HIDDEN_MARKUP.reduce((value, [markup, hidden]) => value.replaceAll(hidden, markup), text);
 }
+function lineAt(text: string, index: number) { return text.slice(0, index).split("\n").length; }
 function lineOf(text: string, needle: string) {
   const index = text.indexOf(needle);
-  return index < 0 ? 1 : text.slice(0, index).split("\n").length;
+  return index < 0 ? 1 : lineAt(text, index);
+}
+function hideMarkdownMarkup(text: string, hideComments = false, commentSpans?: [start: number, end: number][]) {
+  const tokens = [...text.matchAll(MARKDOWN_TOKENS)];
+  const out: string[] = [];
+  let cursor = 0;
+  for (const [i, part] of tokens.entries()) {
+    const [token, backticks, tildes] = part;
+    const start = part.index;
+    if (start < cursor) continue;
+    const fence = backticks ?? tildes;
+    let end: number;
+    if (fence) {
+      const closer = new RegExp(`^[ \\t]*${fence[0]}{${fence.length},}[ \\t]*\\r?$`, "gm");
+      closer.lastIndex = start + token.length + 1;
+      end = closer.exec(text) ? closer.lastIndex : text.length;
+    } else if (token === "<!--") {
+      const close = text.indexOf("-->", start + token.length);
+      end = close < 0 ? text.length : close + 3;
+      commentSpans?.push([start, end]);
+    } else if (token.startsWith("`")) {
+      end = start;
+      for (let j = i + 1; j < tokens.length; j++) {
+        const next = tokens[j]!;
+        if (next[1] || next[2] || !next[0].trim()) break;
+        if (next[0] === token) { end = next.index + token.length; break; }
+        // Backslash escapes do not apply inside a code span, so the backtick run after a backslash can close one.
+        if (next[0] === "\\`" && /^`+/.exec(text.slice(next.index + 1))![0].length === token.length) { end = next.index + 1 + token.length; break; }
+      }
+      if (end === start) continue;
+    } else continue;
+    const literal = text.slice(start, end);
+    const protect = token !== "<!--" || (hideComments && (/[\r\n]/.test(literal) || !DIRECTIVE.test(literal)));
+    out.push(text.slice(cursor, start), protect ? hideMarkup(hideComments ? literal.replaceAll("<!--", COMMENT_OPEN) : literal) : literal);
+    cursor = end;
+  }
+  return out.join("") + text.slice(cursor);
+}
+
+function renderBody(mod: Extract<SkillMod, { version: 2 }>, id: HarnessId, raw: string, location: (line: number) => string) {
+  const text = hideMarkdownMarkup(raw, true);
+  const known = [...new Set([...HARNESS_IDS, ...mod.agents.ids])];
+  const out: string[] = [];
+  const fences: Transformations["fences"] = [];
+  let opening = 0;
+  let active = true;
+  const old = LEGACY_MARKUP.exec(text);
+  if (old) fail(`${location(lineAt(text, old.index))}: legacy markup ${old[0]} is not supported in skillful 2 bodies`,
+    `Use ${COMMENT_FORMS} for fences. Tokens are not supported; use literal text or an agent fence. Put examples in a code span or fenced code block.`);
+  for (const [index, line] of text.split("\n").entries()) {
+    const at = location(index + 1);
+    const match = line.match(COMMENT_FENCE);
+    if (!match) {
+      if (line.includes("<!--")) {
+        fail(`${at}: renderer fence is not on a line of its own`, `Put ${COMMENT_FORMS} on its own line.`);
+      }
+      if (active) out.push(line);
+      continue;
+    }
+    const [, verb, list] = match;
+    const selectors = list!.trim();
+    if (verb === "end") {
+      if (!opening) fail(`${at}: stray <!-- end --> renderer fence`, "Remove it or add its opening fence.");
+      opening = 0;
+      active = true;
+      continue;
+    }
+    if (opening) fail(`${at}: nested renderer fences are not supported`, "Close the current fence with <!-- end --> before opening another.");
+    if (!selectors) fail(`${at}: empty selector list`, `Add at least one agent: ${known.join(", ")}.`);
+    const targets = selectors.split(/\s+/);
+    for (const selector of targets) {
+      const colon = selector.indexOf(":");
+      if (colon >= 0) fail(`${at}: selector kind ${JSON.stringify(selector.slice(0, colon))} is not supported yet`, "Use agent names without a kind prefix.");
+      if (!known.includes(selector)) fail(`${at}: unknown agent ${JSON.stringify(selector)} in renderer fence`, `Use one of: ${known.join(", ")}.`);
+    }
+    opening = index + 1;
+    active = verb === "only" ? targets.includes(id) : !targets.includes(id);
+    fences.push({ kind: "fence", mode: verb === "only" ? "include" : "exclude", targets, outcome: active ? "selected" : "omitted" });
+  }
+  if (opening) fail(`${location(opening)}: unclosed renderer fence`, "Add <!-- end --> on its own line.");
+  return { text: out.join("\n"), fences };
+}
+
+export function migrateBodyFences(raw: string, hasFrontmatter: boolean, source: string, kind: "skill" | "command" = "skill") {
+  const lines = raw.split("\n");
+  const end = hasFrontmatter ? frontmatterEnd(lines, true) : null;
+  if (end !== null) rejectBraceFrontmatter(lines, end, source, kind, true);
+  const start = (end ?? -1) + 1;
+  const legacy = raw.replace(LEGACY_CODE, hideMarkup).split("\n");
+  const commentSpans: [number, number][] = [];
+  const hidden = hideMarkdownMarkup(lines.slice(start).join("\n"), false, commentSpans).split("\n");
+  const directives = hideMarkdownMarkup(lines.slice(start).join("\n"), true).split("\n");
+  let offset = 0;
+  let comment = 0;
+  const rewritten = lines.map((line, index) => {
+    const candidate = hidden[index - start];
+    if (candidate === undefined) return line;
+    const lineStart = offset;
+    offset += line.length + 1;
+    const legacyLine = legacy[index]!;
+    const match = fenceMatch(legacyLine);
+    const fence = match ? `<!-- ${match[1] === "#" ? "only" : "skip"} ${match[2]!.trim()} -->`
+      : /^\s*\{\{\/\}\}\s*$/.test(legacyLine) ? "<!-- end -->" : undefined;
+    if (fence === undefined) {
+      if (COMMENT_FENCE.test(directives[index - start]!)) fail(`${source}:${index + 1}: cannot migrate an HTML comment that skillful 2 reads as a renderer fence`,
+        "Reword or remove the comment before migrating.");
+      return line;
+    }
+    while (commentSpans[comment] && commentSpans[comment]![1] <= lineStart) comment++;
+    const span = commentSpans[comment];
+    if (span && span[0] <= lineStart) fail(`${source}:${index + 1}: cannot migrate legacy renderer fence inside a comment`,
+      "Move the fence outside the comment before migrating.");
+    if (candidate !== line) fail(`${source}:${index + 1}: cannot migrate legacy renderer fence inside code`,
+      "Move the fence outside the code example before migrating.");
+    hidden[index - start] = "";
+    return `${line.match(/^[ \t]*/)![0]}${fence}${line.endsWith("\r") ? "\r" : ""}`;
+  });
+  const body = hidden.join("\n");
+  const old = LEGACY_MARKUP.exec(body);
+  if (old) fail(`${source}:${start + lineAt(body, old.index)}: cannot migrate legacy markup ${old[0]} in body`,
+    /^\{\{[#^/]/.test(old[0]) ? "Move the fence to its own line, or put the example in a code span or fenced code block."
+      : "Replace tokens with literal text. Put examples in a code span or fenced code block.");
+  return rewritten.join("\n");
 }
 function applyBlocks(mod: SkillMod, id: HarnessId, text: string, source: string) {
   const out: string[] = [];
@@ -287,8 +442,22 @@ function applyBlocks(mod: SkillMod, id: HarnessId, text: string, source: string)
   if (inBlock) fail(`${source}: unclosed {{#...}} or {{^...}} fence`, "Add {{/}} on its own line.");
   return out.join("\n");
 }
-function renderText(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, text: string, source: string) {
-  const hidden = hideCodeMarkup(text);
+function renderText(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, text: string, source: string, kind: MarkdownKind, transforms?: Transformations, bodyLocation?: (line: number) => string) {
+  if (mod.version === 2) {
+    const lines = text.split("\n");
+    const end = kind === "rules" ? null : frontmatterEnd(lines, true);
+    if (end !== null) rejectBraceFrontmatter(lines, end, source, kind);
+    const start = (end ?? -1) + 1;
+    const body = renderBody(mod, id, lines.slice(start).join("\n"), bodyLocation ?? ((line) => `${source}:${start + line}`));
+    if (transforms) transforms.fences.push(...body.fences);
+    const prefix = start ? lines.slice(0, start).join("\n") + "\n" : "";
+    return showCodeMarkup((hideMarkdownMarkup(prefix) + body.text).replaceAll("$@", facts.argSyntax)).replaceAll(COMMENT_OPEN, "<!--");
+  }
+  return renderLegacyText(mod, id, facts, tokens, text, source);
+}
+
+function renderLegacyText(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, text: string, source: string) {
+  const hidden = text.replace(LEGACY_CODE, hideMarkup);
   let rendered = applyBlocks(mod, id, hidden, source);
   for (const name of Object.keys(tokens).sort()) rendered = rendered.replaceAll(`{{${name}}}`, tokens[name]!);
   rendered = rendered.replaceAll("$@", facts.argSyntax);
@@ -304,19 +473,13 @@ function renderText(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: R
   return showCodeMarkup(rendered);
 }
 function transformations(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, source: string): Transformations {
-  const raw = hideCodeMarkup(source);
+  const raw = mod.version === 1 ? source.replace(LEGACY_CODE, hideMarkup) : hideMarkdownMarkup(source);
   return {
-    fences: fenceTransforms(mod, id, raw),
+    fences: mod.version === 1 ? fenceTransforms(mod, id, raw) : [],
     tokens: Object.keys(tokens).sort().filter((name) => raw.includes(`{{${name}}}`)).map((name) => ({ kind: "token-substituted", token: name, value: tokens[name]! })),
     argSyntax: raw.includes("$@") ? { kind: "arg-syntax-substituted", from: "$@", to: facts.argSyntax } : null,
     command: [],
   };
-}
-function renderSkill(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, raw: string, source: string) {
-  return filterFrontmatter(renderText(mod, id, facts, tokens, raw, source), facts.skillFrontmatter);
-}
-function renderCommand(mod: SkillMod, id: HarnessId, facts: HarnessFacts, tokens: Record<string, string>, raw: string, source: string) {
-  return filterFrontmatter(renderText(mod, id, facts, tokens, raw, source), facts.commandFrontmatter);
 }
 function walkSupport(root: string, prefix = ""): string[] {
   return readdirSync(join(root, prefix), { withFileTypes: true }).flatMap((entry) => {
@@ -422,9 +585,9 @@ export function replacementKey(origin: string, item: FieldOverride) {
   return sha256(JSON.stringify([origin, item.skill, item.field, item.agent]));
 }
 
-export function replacementHash(mod: SkillMod, raw: string, item: FieldOverride) {
+export function replacementHash(mod: SkillMod, raw: string, item: FieldOverride, source: string) {
   return item.field === "body" ? sha256(bodyOf(raw, true)) : sha256(JSON.stringify((item.agent ? [item.agent] : HARNESS_IDS).map((id) => {
-    const { document } = skillDocument(mod, raw, id, item.skill);
+    const { document } = skillDocument(mod, raw, id, source);
     return [document.has(item.field), document.toJS({ mapAsMap: true })?.get(item.field)];
   }), (_, value) => value instanceof Map ? Object.fromEntries(value) : value));
 }
@@ -452,10 +615,14 @@ function buildAuthoredSkills(project: Project, id: HarnessId, facts: HarnessFact
   const tokens = project.mod.harnesses[id]?.tokens ?? {};
   const v2 = project.mod.version === 2;
   return selectedEntries.map((entry) => {
-    const raw = readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8");
-    const overridden = applyFieldOverrides(project, entry, id, raw);
-    const source = v2 ? overridden.replaceAll("\r\n", "\n") : overridden;
-    const body = renderSkill(project.mod, id, facts, tokens, source, sourcePath(entry, "SKILL.md"));
+    const path = join(entry.root, entry.name, "SKILL.md");
+    const source = entry.sourceKind === "canonical" ? relative(project.root, path) : sourcePath(entry, "SKILL.md");
+    const raw = readFileSync(path, "utf8");
+    const { text: overridden, bodyLocation } = applyFieldOverrides(project, entry, id, raw, source);
+    const text = v2 ? overridden.replaceAll("\r\n", "\n") : overridden;
+    const changes = transformations(project.mod, id, facts, tokens, text);
+    const rendered = renderText(project.mod, id, facts, tokens, text, source, "skill", changes, bodyLocation);
+    const body = filterFrontmatter(rendered, facts.skillFrontmatter);
     if (facts.agentSkillNames && (entry.name.length > 64 || !agentSkillName.test(entry.name))) fail(`invalid Agent Skill name ${JSON.stringify(entry.name)} rendered for ${id}`, "Rename the skill using at most 64 lowercase letters, numbers, and single hyphens.");
     return {
       name: entry.name,
@@ -465,7 +632,7 @@ function buildAuthoredSkills(project: Project, id: HarnessId, facts: HarnessFact
       delivery: { kind: "file", path: `${skillPath}/${entry.name}/SKILL.md` },
       sha256: sha256(body),
       frontmatter: frontmatterPlan(v2 ? raw.replaceAll("\r\n", "\n") : raw, body),
-      transformations: transformations(project.mod, id, facts, tokens, source),
+      transformations: changes,
       supportFiles: supportFiles(entry, `${skillPath}/${entry.name}`),
       body,
       sourceDir: join(entry.root, entry.name),
@@ -526,8 +693,9 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
 
   const commands: CommandPlan[] = commandsAsSkills ? [] : selectedCommands.map((entry) => {
     const raw = readFileSync(join(entry.root, entry.name), "utf8");
-    const body = renderCommand(project.mod, id, facts, tokens, raw, commandSource(entry).path!);
-    return { name: entry.name, source: commandSource(entry), delivery: { kind: "file", path: `${commandRoot!}/${entry.name}` }, sha256: sha256(body), frontmatter: frontmatterPlan(raw, body), transformations: transformations(project.mod, id, facts, tokens, raw), body };
+    const changes = transformations(project.mod, id, facts, tokens, raw);
+    const body = filterFrontmatter(renderText(project.mod, id, facts, tokens, raw, commandLocation(project, entry), "command", changes), facts.commandFrontmatter);
+    return { name: entry.name, source: commandSource(entry), delivery: { kind: "file", path: `${commandRoot!}/${entry.name}` }, sha256: sha256(body), frontmatter: frontmatterPlan(raw, body), transformations: changes, body };
   });
   uniqueByName(commands.map((command) => ({ name: command.name, origin: command.source.origin ?? command.source.kind })), `delivered command for ${id}`);
 
@@ -538,7 +706,8 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
     const name = entry.name.replace(/\.md$/, "");
     if (facts.agentSkillNames && (name.length > 64 || !agentSkillName.test(name))) fail(`invalid Agent Skill name ${JSON.stringify(name)} synthesized from command ${entry.name} for ${id}`, "Rename the command using at most 64 lowercase letters, numbers, and single hyphens.");
     const raw = readFileSync(join(entry.root, entry.name), "utf8");
-    const rendered = renderText(project.mod, id, facts, tokens, raw, commandSource(entry).path!);
+    const commandTransforms = transformations(project.mod, id, facts, tokens, raw);
+    const rendered = renderText(project.mod, id, facts, tokens, raw, commandLocation(project, entry), "command", commandTransforms);
     const description = frontmatterValue("description", rendered) ?? `Run the ${name} prompt when explicitly invoked.`;
     const hint = frontmatterValue("argument-hint", rendered);
     const extra = [
@@ -546,7 +715,6 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
       ...Object.entries(facts.syntheticSkillFrontmatter ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}: ${typeof value === "boolean" ? value : JSON.stringify(value)}`),
     ];
     const body = `---\nname: ${name}\ndescription: ${JSON.stringify(description)}${extra.length ? `\n${extra.join("\n")}` : ""}\n---\n\n${bodyOf(rendered).replace(/^\n/, "")}`;
-    const commandTransforms = transformations(project.mod, id, facts, tokens, raw);
     commandTransforms.command = ["command-synthesized-as-skill"];
     return {
       name,
@@ -565,7 +733,7 @@ function buildHarness(project: Project, id: HarnessId, facts: HarnessFacts, inst
   const skills = [...authoredSkills, ...syntheticSkills].sort((left, right) => left.name.localeCompare(right.name));
 
   const rulesPath = resolveLocalRoot(project, "rules");
-  const rulesBody = rulesPath ? renderText(project.mod, id, facts, tokens, readFileSync(rulesPath, "utf8"), project.mod.roots.rules) : "";
+  const rulesBody = rulesPath ? renderText(project.mod, id, facts, tokens, readFileSync(rulesPath, "utf8"), project.mod.roots.rules, "rules") : "";
   return {
     id,
     facts,
@@ -647,7 +815,8 @@ export function resolvePlan(project: Project, options: ResolveOptions = {}, prev
     if (item.operation !== "set") return false;
     const entry = entries.allSkills.find(({ name }) => name === item.skill)!;
     const old = baselines.get(replacementKey(entry.origin, item));
-    return old !== undefined && old !== replacementHash(project.mod, readFileSync(join(entry.root, entry.name, "SKILL.md"), "utf8"), item);
+    const path = join(entry.root, entry.name, "SKILL.md");
+    return old !== undefined && old !== replacementHash(project.mod, readFileSync(path, "utf8"), item, relative(project.root, path));
   }) : [];
   const regroupedSkills = new Map(previouslyRendered.filter((id) => !selected.includes(id)).map((id) => [id, skills.get(id)!]));
   return { project, harnesses, placements, regroupedSkills, changedOverrides };
@@ -655,7 +824,7 @@ export function resolvePlan(project: Project, options: ResolveOptions = {}, prev
 export function schemaFor(project: Project) {
   const facts = loadHarnesses();
   return {
-    markup: ["{{token}}", "{{#harness}}", "{{^harness}}", "{{/}}", "$@"],
+    markup: project.mod.version === 2 ? ["<!-- only AGENT … -->", "<!-- skip AGENT … -->", "<!-- end -->", "$@"] : ["{{token}}", "{{#harness}}", "{{^harness}}", "{{/}}", "$@"],
     harnesses: mapHarnesses((id) => {
       const value = facts[id];
       return { argSyntax: value.argSyntax, tokens: project.mod.harnesses[id]?.tokens ?? {}, skillFrontmatter: value.skillFrontmatter, commandFrontmatter: value.commandFrontmatter, commandMerge: value.commandMerge, agentSkillNames: value.agentSkillNames === true };

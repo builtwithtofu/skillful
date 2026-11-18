@@ -251,7 +251,7 @@ skillful migrate
 skillful render --dry-run
 ```
 
-`migrate` rewrites `skill.mod` in place and keeps your pins. It stops without
+`migrate` rewrites `skill.mod` and local body fences in place and keeps your pins. It stops without
 writing if a setting can't be translated without changing what renders. The
 same project in each form, below its root lines:
 

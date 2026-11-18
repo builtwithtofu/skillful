@@ -14,6 +14,13 @@ merges duplicate pins at the same revision, and removes unused pins. Run
 than guessing at settings with no direct translation, such as custom tokens or
 setups with different agent lists. If it cannot find an omitted skill, declare
 its source or remove the omission if the skill is retired.
+Migration also rewrites legacy body fences in local skills, commands, and rules.
+Remove brace markup from frontmatter and write literal values in place of tokens.
+Run `skillful migrate`, then add `<skill>.<field> on <agent> = "value"` in the
+skillful 2 `skill.mod` if needed. Migration refuses body tokens outside code and
+legacy fences that skillful 2 would treat as code.
+It does not rewrite dependencies: select a compatible pin if an imported body
+still uses legacy fences.
 Setup install path overrides become `harness` paths inside the corresponding
 `machine`, except that `.agents/skills` overrides for agents that read the shared
 folder use shared placement instead. Run `skillful render <machine>` afterward
@@ -86,6 +93,7 @@ Use `.body =` to replace the instructions or `.body.append =` to add text
 verbatim (include a leading newline if needed). Use `.body.replace` to swap an
 exact passage. Both operands can be quoted strings or project-relative paths.
 Rendering stops if the passage does not appear exactly once.
+Body overrides are applied before fences are evaluated.
 
 ```text
 angular-developer.body = ./overlays/angular-developer-full.md

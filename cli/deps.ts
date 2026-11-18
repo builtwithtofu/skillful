@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { cacheKey, narHash } from "./nar.ts";
 import { readLock, readOverrideBaselines, pinFor, validateLock, writeLockAtomic, type LockEntry } from "./lock.ts";
 import { formatMod, migrateMod, type Require, type SkillMod } from "./mod.ts";
@@ -197,7 +197,7 @@ function transactionalWrite(project: Project, text: string, entries: LockEntry[]
 
 export async function migrateProject(project: Project) {
   if (project.mod.version === 2) return undefined;
-  const { resolveSkills } = await import("./contract.ts");
+  const { resolveSkills, migrateBodyFences } = await import("./contract.ts");
   const entries = readLock(project.root, false);
   const migrated = migrateMod(project.mod, project.modPath, () => resolveSkills(project, cachedDependencyPaths(project, {}, undefined, entries)));
   const refs = new Set(migrated.mod.requires.map(({ ref }) => ref));
@@ -212,8 +212,32 @@ export async function migrateProject(project: Project) {
     );
   }
   const next = validateLock(migrated.mod, [...pins.values()]);
-  if (next.length !== entries.length) transactionalWrite(project, migrated.text, next);
-  else writeFileSync(project.modPath, migrated.text);
+  const local = { ...project, mod: migrated.mod };
+  const skills = resolveLocalRoot(local, "skills");
+  const commands = resolveLocalRoot(local, "commands");
+  const rules = resolveLocalRoot(local, "rules");
+  const files = [
+    ...(skills ? readdirSync(skills, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map(({ name }) => join(skills, name, "SKILL.md")).filter(existsSync) : []),
+    ...(commands ? readdirSync(commands, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".md")).map(({ name }) => join(commands, name)) : []),
+    ...(rules ? [rules] : []),
+  ];
+  const changes = [...new Set(files)].flatMap((path) => {
+    const before = readFileSync(path, "utf8");
+    const after = migrateBodyFences(before, path !== rules, relative(project.root, path), dirname(path) === commands ? "command" : "skill");
+    return before === after ? [] : [{ path, before, after }];
+  });
+  const written: typeof changes = [];
+  try {
+    for (const change of changes) {
+      writeFileSync(change.path, change.after);
+      written.push(change);
+    }
+    if (next.length !== entries.length) transactionalWrite(project, migrated.text, next);
+    else writeFileSync(project.modPath, migrated.text);
+  } catch (cause) {
+    for (const { path, before } of written.reverse()) writeFileSync(path, before);
+    throw cause;
+  }
   return migrated;
 }
 function previousPin(mod: SkillMod, requirement: Require, entries: LockEntry[]) {
@@ -258,7 +282,7 @@ async function overrideBaselines(project: Project, before: LockEntry[], after: L
         if (!nextRoot) continue;
         file = join(nextRoot, item.skill, "SKILL.md");
       }
-      if (existsSync(file)) baselines.set(key, replacementHash(mod, readFileSync(file, "utf8"), item));
+      if (existsSync(file)) baselines.set(key, replacementHash(mod, readFileSync(file, "utf8"), item, relative(project.root, file)));
     }
   }
   return baselines;

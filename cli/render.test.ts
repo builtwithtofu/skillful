@@ -4,21 +4,193 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { discoverProject } from "./project.ts";
 import { commitStagedTree, renderProject, RenderOutputError } from "./render.ts";
-import { contractFor, harnessPlan, resolvePlan } from "./contract.ts";
+import { contractFor, harnessPlan, migrateBodyFences, resolvePlan } from "./contract.ts";
 import { copyBasicFixture } from "./test-fixture.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-function fixture() {
+function fixture(v2 = false) {
   const root = mkdtempSync(join(tmpdir(), "skillful-render-test-"));
   roots.push(root);
   const project = join(root, "project");
   copyBasicFixture(project);
+  if (v2) writeFileSync(join(project, "rules/global_agents.md"), "<!-- only pi -->\nPi rule.\n<!-- end -->\n");
   return { root, project, resolved: discoverProject({ project }) };
 }
 function text(path: string) { return readFileSync(path, "utf8"); }
 
+test.each(["{{#pi}}", "{{^pi}}", "{{/}}", "{{tool/name}}"])("rejects %s in skillful 2 frontmatter even with a field override", (markup) => {
+  const { project } = fixture(true);
+  writeFileSync(join(project, "skill.mod"), 'skillful 2\nagents pi\nexample.description on pi = "Pi guidance"\n');
+  writeFileSync(join(project, "skills/example/SKILL.md"), `---\nname: example\ndescription: ${JSON.stringify(markup)}\n---\n`);
+  const render = () => resolvePlan(discoverProject({ project }));
+  expect(render).toThrow("skills/example/SKILL.md:3: legacy brace markup is not supported in skillful 2 frontmatter");
+  try { render(); } catch (error) { expect(error).toHaveProperty("recovery", expect.stringContaining('<skill>.<field> on <agent> = "value"')); }
+});
+
+test("uses a per-agent field override for local skill frontmatter", () => {
+  const { project } = fixture(true);
+  writeFileSync(join(project, "skill.mod"), 'skillful 2\nagents pi claude\nexample.description on pi = "Pi guidance"\n');
+  writeFileSync(join(project, "skills/example/SKILL.md"), "---\nname: example\ndescription: Common guidance\n---\n");
+  const plan = resolvePlan(discoverProject({ project }));
+  expect(harnessPlan(plan, "pi").skills[0]?.body).toContain("description: Pi guidance");
+  expect(harnessPlan(plan, "claude").skills[0]?.body).toContain("description: Common guidance");
+});
+
+test("renders a fence across body override values", () => {
+  const { project } = fixture(true);
+  writeFileSync(join(project, "skill.mod"), 'skillful 2\nagents pi codex\nexample.body.append = "<!-- only pi -->\\n"\nexample.body.append = "Pi only.\\n<!-- end -->\\n"\n');
+  writeFileSync(join(project, "skills/example/SKILL.md"), "Common.\n");
+  const plan = resolvePlan(discoverProject({ project }));
+  expect(harnessPlan(plan, "pi").skills.find(({ name }) => name === "example")?.body).toBe("Common.\nPi only.\n");
+  expect(harnessPlan(plan, "codex").skills.find(({ name }) => name === "example")?.body).toBe("Common.\n");
+});
+
+test("reports authored paths and locations for render errors", () => {
+  const { project } = fixture(true);
+  renameSync(join(project, "skills"), join(project, "library"));
+  renameSync(join(project, "commands"), join(project, "prompts"));
+  const skill = join(project, "library/example/SKILL.md");
+  const mod = join(project, "skill.mod");
+  const header = "skillful 2\nlocal ./library ./prompts\nagents pi codex\n";
+  const render = () => resolvePlan(discoverProject({ project }), { harnesses: ["pi"] });
+  const frontmatter = "---\r\nname: example\r\ndescription: Example\r\n---\r\n";
+  writeFileSync(skill, frontmatter + "First.\r\n");
+  writeFileSync(mod, header + 'example.body.append on pi = "<!-- only pi -->\\n"\nexample.body.append on codex = "Codex."\nexample.description = "New description"\nexample.body.append = "Second.\\nThird.\\n"\n');
+  expect(render).toThrow("library/example/SKILL.md (after skill.mod overrides at lines 4, 7): unclosed renderer fence");
+
+  writeFileSync(mod, header + 'example.description = "First line.\\nSecond line."\nexample.body.append on codex = "Codex."\n');
+  writeFileSync(skill, frontmatter + "First.\r\n<!-- end -->\r\n");
+  expect(render).toThrow("library/example/SKILL.md:6: stray <!-- end -->");
+
+  writeFileSync(skill, frontmatter + "First.\r\n");
+  writeFileSync(join(project, "prompts/review.md"), "Prompt.\n<!-- end -->\n");
+  for (const harness of ["pi", "codex"]) {
+    expect(() => resolvePlan(discoverProject({ project }), { harnesses: [harness] })).toThrow("prompts/review.md:2: stray <!-- end -->");
+  }
+});
+
+test("command frontmatter errors recommend a command-compatible fix", () => {
+  const { project } = fixture(true);
+  writeFileSync(join(project, "skill.mod"), "skillful 2\nagents codex\n");
+  writeFileSync(join(project, "skills/example/SKILL.md"), "Example.\n");
+  writeFileSync(join(project, "commands/standalone.md"), '---\ndescription: "{{tool/name}}"\n---\nPrompt.\n');
+  expect(() => resolvePlan(discoverProject({ project }))).toThrow(expect.objectContaining({
+    message: expect.stringContaining("commands/standalone.md:2:"),
+    recovery: "Recovery: Remove the brace markup. For a token, write its literal value.",
+  }));
+});
+
+test("protects indented and unclosed code fences and multiline code spans", () => {
+  const { project } = fixture(true);
+  const examples = [
+    "- Examples:", "  ```markdown", "  <!-- end -->", "  ``", "  ~~~~", "  <!-- skip bogus -->", " \t`````",
+    "\t~~~markdown", "\t{{^pi}}", "\t<!-- end -->", "\t~~~~",
+    "A `` span with a single ` and", "{{tool/name}} <!-- end --> ``", "",
+  ].join("\n");
+  const unclosed = "\t```markdown\n<!-- end -->\n{{token}}\n";
+  const skill = join(project, "skills/example/SKILL.md");
+  writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi\n");
+  writeFileSync(skill, examples + "<!-- only pi -->\nSelected.\n<!-- end -->\n" + unclosed);
+  const render = () => harnessPlan(resolvePlan(discoverProject({ project })), "pi").skills.find(({ name }) => name === "example")?.body;
+  expect(render()).toBe(examples + "Selected.\n" + unclosed);
+
+  writeFileSync(skill, "An unmatched `\n \t\n{{tool/name}}\nEnds with `.\n");
+  expect(render).toThrow("skills/example/SKILL.md:3: legacy markup {{tool/name}}");
+});
+
+test("protects code fences opened on list marker lines without hiding later renderer fences", () => {
+  const { project } = fixture(true);
+  const skill = join(project, "skills/example/SKILL.md");
+  writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi\n");
+  for (const [opener, indent, closer] of [["- ~~~text", "  ", "~~~"], ["* ```", "  ", "```"], ["1. ```sh", "   ", "```"]]) {
+    const example = `${opener}\n${indent}<!-- end -->\n${indent}${closer}\n`;
+    writeFileSync(skill, example + "<!-- only pi -->\nSelected.\n<!-- end -->\n");
+    const plan = resolvePlan(discoverProject({ project }));
+    expect(harnessPlan(plan, "pi").skills.find(({ name }) => name === "example")?.body).toBe(example + "Selected.\n");
+  }
+});
+
+test("an escaped backtick does not open a span but closes one", () => {
+  const { project } = fixture(true);
+  const before = "A literal \\` before a renderer fence.\n";
+  const span = "Windows paths end in `\\`. Write ``{{token}}\\``.\n";
+  const after = "Then run `dir`.\n";
+  writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi\n");
+  writeFileSync(join(project, "skills/example/SKILL.md"), before + "<!-- only pi -->\nSelected.\n<!-- end -->\n" + span + "<!-- skip pi -->\nNot pi.\n<!-- end -->\n" + after);
+  const plan = resolvePlan(discoverProject({ project }));
+  expect(harnessPlan(plan, "pi").skills.find(({ name }) => name === "example")?.body).toBe(before + "Selected.\n" + span + after);
+});
+
+test("leaves multiline comments that look like renderer fences unchanged", () => {
+  const { project } = fixture(true);
+  const comment = "<!-- only bogus\n{{token}} $@\n-->\n";
+  writeFileSync(join(project, "skill.mod"), "skillful 2\nagents claude\n");
+  writeFileSync(join(project, "skills/example/SKILL.md"), comment + "<!-- only claude -->\nSelected.\n<!-- end -->\n");
+  const plan = resolvePlan(discoverProject({ project }));
+  expect(harnessPlan(plan, "claude").skills.find(({ name }) => name === "example")?.body).toBe(comment + "Selected.\n");
+});
+
+test("treats braces on separate lines as prose in render and migrate", () => {
+  const { project } = fixture(true);
+  const source = "---\nname: example\ndescription: |-\n  An unmatched {{\n  followed by }}\n---\nWrite {{ on one line\nand }} on the next.\n";
+  writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi\n");
+  writeFileSync(join(project, "skills/example/SKILL.md"), source);
+  const plan = resolvePlan(discoverProject({ project }));
+  expect(harnessPlan(plan, "pi").skills.find(({ name }) => name === "example")?.body).toBe(source);
+  expect(migrateBodyFences(source, true, "SKILL.md")).toBe(source);
+});
+
+test("migrate recommends a fence remedy for legacy markers in prose", () => {
+  for (const marker of ["{{#pi}}", "{{^pi}}", "{{/}}"]) {
+    expect(() => migrateBodyFences(`Example: ${marker}\n`, false, "rules.md")).toThrow(expect.objectContaining({
+      message: `rules.md:1: cannot migrate legacy markup ${marker} in body`,
+      recovery: "Recovery: Move the fence to its own line, or put the example in a code span or fenced code block.",
+    }));
+  }
+});
+
 describe("TypeScript renderer", () => {
+  test("renders comment fences in skills, commands, and rules without touching examples or ordinary comments", () => {
+    const { project } = fixture(true);
+    writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi codex editor\nharness editor { skills .editor/skills }\n");
+    const examples = "`<!-- only unknown -->`\n```markdown\n<!-- end -->\n{{token}} $@\n```\n<!-- note {{token}} $@ -->\n";
+    const selected = "Selected.\n<!-- end of steps -->\n<!--\nonly bogus -->\nStill selected.\n";
+    writeFileSync(join(project, "skills/example/SKILL.md"), `<!-- only pi editor -->\n${selected}<!--   end   -->\n<!-- skip pi editor -->\nInverted.\n<!-- end -->\n` + examples);
+    writeFileSync(join(project, "commands/standalone.md"), "<!-- only pi -->\nPi prompt: $@\n<!-- end -->\nCommon prompt.\n");
+    const plan = resolvePlan(discoverProject({ project }));
+    const pi = harnessPlan(plan, "pi");
+    const codex = harnessPlan(plan, "codex");
+    const editor = harnessPlan(plan, "editor");
+    expect(pi.skills.find(({ name }) => name === "example")?.body).toBe(selected + examples);
+    expect(editor.skills.find(({ name }) => name === "example")?.body).toBe(selected + examples);
+    expect(codex.skills.find(({ name }) => name === "example")?.body).toBe("Inverted.\n" + examples);
+    expect(pi.commands[0]?.body).toBe("Pi prompt: $@\nCommon prompt.\n");
+    expect(codex.skills.find(({ name }) => name === "standalone")?.body.split("---\n")[2]).toBe("\nCommon prompt.\n");
+    expect(pi.rules.body).toBe("Pi rule.\n");
+    expect(codex.rules.body).toBe("");
+    expect(contractFor(plan).schema.markup).toEqual(["<!-- only AGENT … -->", "<!-- skip AGENT … -->", "<!-- end -->", "$@"]);
+  });
+
+  test.each([
+    ["<!-- only -->", 5, "empty selector list", "Add at least one agent"],
+    ["<!-- skip unknown -->", 5, 'unknown agent "unknown"', "Use one of: claude"],
+    ["<!-- only model:example -->", 5, 'selector kind "model" is not supported yet', "Use agent names"],
+    ["<!-- only version:2 -->", 5, 'selector kind "version" is not supported yet', "Use agent names"],
+    ["<!-- only codex -->\n<!-- skip pi -->", 6, "nested renderer fences", "Close the current fence with <!-- end -->"],
+    ["<!-- end -->", 5, "stray <!-- end -->", "Remove it or add its opening fence"],
+    ["<!-- only pi -->\ntext", 5, "unclosed renderer fence", "Add <!-- end -->"],
+    ["text <!-- skip pi -->", 5, "renderer fence is not on a line of its own", "on its own line"],
+    ["<!-- only pi --> <!-- end -->", 5, "renderer fence is not on a line of its own", "on its own line"],
+    ...["{{#pi}}", "{{^pi}}", "{{/}}", "{{tool/name}}"].map((old) => [old, 5, `legacy markup ${old}`, "Put examples in a code span or fenced code block."] as const),
+  ] as const)("rejects invalid skillful 2 markup: %s", (body, line, message, remedy) => {
+    const { project } = fixture(true);
+    writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi\n");
+    writeFileSync(join(project, "skills/example/SKILL.md"), `---\nname: example\ndescription: Example\n---\n${body}\n`);
+    const render = () => resolvePlan(discoverProject({ project }));
+    expect(render).toThrow(`skills/example/SKILL.md:${line}: ${message}`);
+    try { render(); } catch (error) { expect(error).toHaveProperty("recovery", expect.stringContaining(remedy)); }
+  });
   test("shares one plan across contract and rendered skills, commands, rules, and support files", () => {
     const { project, resolved } = fixture();
     const plan = resolvePlan(resolved);
@@ -74,7 +246,7 @@ harness pi (
   });
 
   test("a fresh targeted render never shares a skill skipped by another declared reader", () => {
-    const { project } = fixture();
+    const { project } = fixture(true);
     writeFileSync(join(project, "skill.mod"), 'skillful 2\nagents codex pi\nskip example on codex "Pi only."\n');
     writeFileSync(join(project, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example\n---\n");
     const manifest = discoverProject({ project });
@@ -90,7 +262,7 @@ harness pi (
   });
 
   test("a targeted shared-skill render leaves other harness commands alone", () => {
-    const { project } = fixture();
+    const { project } = fixture(true);
     writeFileSync(join(project, "skill.mod"), "skillful 2\nagents codex pi\n");
     writeFileSync(join(project, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example\n---\n");
     const prompt = join(project, "commands", "standalone.md");
@@ -103,13 +275,13 @@ harness pi (
     expect(text(piCommand)).toBe("First prompt.\n");
     expect(text(join(project, "rendered", "codex", "skills", "standalone", "SKILL.md"))).toContain("Second prompt.");
     writeFileSync(piCommand, "Local edit.\n");
-    writeFileSync(prompt, "{{#pi}}\n{{undefined_for_pi}}\n{{/}}\nCodex prompt.\n");
+    writeFileSync(prompt, "<!-- only pi -->\nPi prompt.\n<!-- end -->\nCodex prompt.\n");
     renderProject(manifest, { harnesses: ["codex"] });
     expect(text(piCommand)).toBe("Local edit.\n");
   });
 
   test("regrouping refreshes retained skill contracts without rerendering commands or rules", () => {
-    const { project } = fixture();
+    const { project } = fixture(true);
     const mod = join(project, "skill.mod");
     const header = "skillful 2\nagents codex pi\n";
     writeFileSync(mod, header);
@@ -146,7 +318,7 @@ harness pi (
   });
 
   test("shares identical skills and removes stale shared copies when selection or front matter differs", () => {
-    const { project } = fixture();
+    const { project } = fixture(true);
     const mod = join(project, "skill.mod");
     const source = join(project, "skills", "example", "SKILL.md");
     const header = "skillful 2\nagents claude codex pi\n";

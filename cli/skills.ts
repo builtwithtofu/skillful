@@ -19,7 +19,7 @@ type Topic = {
 
 const TOPICS: readonly Topic[] = [
   { id: "core", group: "", summary: "Author once, render per harness. What skillful owns, the exact-name contract, and shared rules.", markdown: core },
-  { id: "author", group: "Author", summary: "Write one SKILL.md with name+description frontmatter; body says how and when to use it.", markdown: author },
+  { id: "author", group: "Author", summary: "Write one SKILL.md: name and description gate loading; the body says how and when to use it. Skillful 2 uses HTML-comment fences.", markdown: author },
   { id: "mod", group: "Project", summary: "Start with init; declare sources, agents, machines, and skill overrides.", markdown: mod },
   { id: "deps", group: "Project", summary: "Pull other skill trees via Git: add resolves and fetches; fetch and update use exact pins.", markdown: deps },
   { id: "inspect", group: "Verify", summary: "Show one skill as authored or rendered per harness; check validates. Read-only.", markdown: inspect },

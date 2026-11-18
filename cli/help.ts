@@ -63,6 +63,11 @@ Afterward:
 export const MIGRATE_AFTER_HELP = `
 Use when moving an existing project to skillful 2; skillful 1 still works.
 Migration stops if a setting cannot be translated without changing the render.
+It rewrites local skill, command, and rules body fences to HTML comments.
+Remove brace markup from frontmatter and write literal values in place of tokens.
+Run skillful migrate, then add <skill>.<field> on <agent> = "value" in the skillful 2 skill.mod if needed.
+Migration refuses body tokens outside code and legacy fences that skillful 2 would treat as code.
+Dependency trees are not rewritten; use a pin with skillful 2 markup.
 Migration lists skills from each source. If a pin is missing from the cache, run skillful fetch first.
 Duplicate aliases at the same pin collapse to one; pins for unselected sources are removed.
 If an omitted skill can't be found, declare its source or remove the omission if retired.
@@ -127,6 +132,7 @@ skillful 1. Name a machine or setup to apply its skill selection. In skillful 2,
 at least two shared-folder agents must get the same copy to use .agents/skills.
 Pass a built-in or top-level declared agent to --harness.
 Conditional fences can also target agents listed in skillful 2.
+Body overrides from skill.mod are applied before fences are evaluated.
 Claude Code uses .claude/skills. A --harness render can regroup other already-
 rendered agents' skills in the same machine layout and refresh their contracts
 without touching commands or rules. If a partial render would remove a skill a
