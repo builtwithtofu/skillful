@@ -4,7 +4,7 @@ import cursor from "../harnesses/cursor.json";
 import grok from "../harnesses/grok.json";
 import opencode from "../harnesses/opencode.json";
 import pi from "../harnesses/pi.json";
-import { HARNESS_IDS, type HarnessId } from "./mod.ts";
+import { HARNESS_IDS, type BuiltinHarnessId, type HarnessId } from "./mod.ts";
 
 export type HarnessInstallPaths = { skills: string; commands?: string; rules?: string };
 export type HarnessFacts = {
@@ -35,7 +35,7 @@ function validateInstallPaths(candidate: unknown, path: string, scope: "home" | 
   if (commandMerge === "skill" ? paths.commands !== undefined : typeof paths.commands !== "string") throw new HarnessError(`invalid harness facts ${path}: installPaths.${scope}.commands does not match commandMerge`, "Use no commands path for skill delivery and a commands path for file delivery.");
   return paths as HarnessInstallPaths;
 }
-function validate(candidate: unknown, path: string): HarnessFacts {
+function validate(candidate: unknown, path: string): HarnessFacts & { name: BuiltinHarnessId } {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new HarnessError(`invalid harness facts ${path}: expected an object`, "Repair the bundled harness JSON before using skillful.");
   const value = candidate as Record<string, unknown>;
   const name = value.name;
@@ -52,11 +52,11 @@ function validate(candidate: unknown, path: string): HarnessFacts {
   const syntheticFrontmatter = value.syntheticSkillFrontmatter;
   if (syntheticFrontmatter !== undefined && (!syntheticFrontmatter || typeof syntheticFrontmatter !== "object" || Array.isArray(syntheticFrontmatter) || Object.entries(syntheticFrontmatter).some(([key, field]) => !key || (typeof field !== "string" && typeof field !== "boolean")))) throw new HarnessError(`invalid harness facts ${path}: syntheticSkillFrontmatter is invalid`, "Use frontmatter names with string or boolean values.");
   for (const key of ["skillFrontmatter", "commandFrontmatter"]) if (!Array.isArray(value[key]) || !value[key]!.every((entry) => typeof entry === "string")) throw new HarnessError(`invalid harness facts ${path}: ${key} must be a string array`, "Repair the bundled harness JSON before using skillful.");
-  return value as HarnessFacts;
+  return value as HarnessFacts & { name: BuiltinHarnessId };
 }
 
-export function loadHarnesses(): Record<HarnessId, HarnessFacts> {
-  const result: Partial<Record<HarnessId, HarnessFacts>> = {};
+export function loadHarnesses(): Record<BuiltinHarnessId, HarnessFacts> {
+  const result: Partial<Record<BuiltinHarnessId, HarnessFacts>> = {};
   for (const [file, candidate] of EMBEDDED_FACTS) {
     const fact = validate(candidate, file);
     if (file !== `${fact.name}.json`) throw new HarnessError(`invalid harness facts ${file}: filename must match ${fact.name}.json`, "Rename the fact file or correct its name field.");
@@ -64,14 +64,14 @@ export function loadHarnesses(): Record<HarnessId, HarnessFacts> {
     result[fact.name] = fact;
   }
   for (const name of HARNESS_IDS) if (!result[name]) throw new HarnessError(`missing harness facts for ${name}`, "Restore the bundled harness facts.");
-  return result as Record<HarnessId, HarnessFacts>;
+  return result as Record<BuiltinHarnessId, HarnessFacts>;
 }
 
-export function normalizeHarness(input: string): { name: HarnessId; warning?: string } {
+export function normalizeHarness(input: string): { name: BuiltinHarnessId; warning?: string } {
   if (input === "opencode-v2") throw new HarnessError(
     "retired harness: opencode-v2",
     "Use opencode. Keep the retired layout with --path skills=.config/opencode-v2/skills --path commands=.config/opencode-v2/commands.",
   );
   if (!(HARNESS_IDS as readonly string[]).includes(input)) throw new HarnessError(`unknown harness: ${input}`);
-  return { name: input as HarnessId };
+  return { name: input as BuiltinHarnessId };
 }

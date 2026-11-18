@@ -66,12 +66,13 @@ Migration stops if a setting cannot be translated without changing the render.
 Migration lists skills from each source. If a pin is missing from the cache, run skillful fetch first.
 Duplicate aliases at the same pin collapse to one; pins for unselected sources are removed.
 If an omitted skill can't be found, declare its source or remove the omission if retired.
-Install path overrides are kept as comments, not applied by skillful 2.
+Setup install path overrides become harness paths inside the corresponding machine.
+For agents that read .agents/skills, an override to that path uses shared placement instead.
 
 Example:
   skillful migrate --project ./agent
 
-Afterward, use skillful render to verify the output and review any install path warnings.
+Afterward, use skillful render to verify the delivered files.
 `;
 
 export const ADD_AFTER_HELP = `
@@ -143,10 +144,13 @@ ownership, refuses unmanaged or edited collisions, and removes only unchanged
 stale files. Named setups select home or project paths from their declared root.
 Skillful 2 selects the machine matching your short hostname unless you name one.
 Use only <skills> on <agents> "reason" in skill.mod to restrict who gets a skill.
+Use a top-level harness block to set destinations or define an agent. A machine's
+harness block overrides only the fields it sets. Claude Code rules go to
+~/.claude/CLAUDE.md by default; Cursor has no default rules destination.
 See skillful skills show mod for the manifest syntax.
 Machine installs use .agents/skills only when at least two shared-folder agents
-get the same copy. A lone reader, differing skills, and Claude Code's skills use
-separate folders. Use --root to relocate. Only skillful 1
+get the same copy. A lone reader, differing skills, and agents that don't read
+the shared folder use separate folders. Use --root to relocate. Only skillful 1
 supports one-off --harness installs and their --path overrides.
 --remove retires a named setup from its receipt;
 pass --root after deleting its declaration. Valid source overrides are ignored
@@ -175,6 +179,7 @@ Examples:
 
 export const INSPECT_AFTER_HELP = `
 Without --rendered this is the authored view. --rendered is per harness.
+Pass a built-in or top-level declared agent to --harness.
 
 Examples:
   skillful inspect <skill>
@@ -183,6 +188,7 @@ Examples:
 
 export const CHECK_AFTER_HELP = `
 Read-only. --strict promotes warnings to failure.
+When an agent's skills path is set only on machines, check uses those machine configurations.
 Warns when an upstream front-matter field or body replaced with = in skill.mod differs from
 its baseline in skill.lock. Update alone keeps existing baselines. After reviewing and
 accepting the upstream change, remove the override from skill.mod, run skillful update with no arguments,

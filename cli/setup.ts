@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { harnessPlan, resolvePlan, sharedSkillsPath, type ResolveOptions } from "./contract.ts";
 import { loadHarnesses } from "./harness.ts";
 import { pathConflict, resolveInstallPaths, type InstallPaths } from "./install.ts";
-import type { HarnessId } from "./mod.ts";
+import type { BuiltinHarnessId, HarnessId } from "./mod.ts";
 import type { Project } from "./project.ts";
 
 export type ResolvedSetupFile = { harness: HarnessId; artifact: string };
@@ -28,7 +28,7 @@ export function resolveSetup(project: Project, name: string, options: ResolveOpt
   const sharedSkills = plan.placements.some(({ root }) => root === ".agents") ? sharedSkillsPath : undefined;
   const harnesses = setup.harnesses.map(({ id, paths }) => ({
     name: id,
-    paths: resolveInstallPaths(facts[id], v2 && id === "codex" ? { skills: ".codex/skills", ...paths } : paths, setup.root),
+    paths: v2 ? resolveInstallPaths(harnessPlan(plan, id).facts) : resolveInstallPaths(facts[id as BuiltinHarnessId], paths, setup.root),
   }));
   const destinations = harnesses.flatMap((harness) => Object.values(harness.paths));
   if (sharedSkills) destinations.push(sharedSkills);

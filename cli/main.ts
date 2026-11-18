@@ -22,7 +22,7 @@ import {
 } from "./help.ts";
 import { installProject, installSetup, removeSetup, type InstallPaths } from "./install.ts";
 import { checkCommand, diffCommand, inspectCommand, listCommand, manifestCommand, schemaCommand, setupShowCommand, type OutputFormat } from "./introspect.ts";
-import { formatText, type HarnessId } from "./mod.ts";
+import { formatText, type HarnessId, type SkillMod } from "./mod.ts";
 import { discoverProject, initProject } from "./project.ts";
 import { renderProject } from "./render.ts";
 import { renderSkillTopic, resolveSkillTopic, skillTree } from "./skills.ts";
@@ -61,10 +61,12 @@ function installPaths(values: string[] | undefined) {
   }
   return Object.keys(result).length ? result : undefined;
 }
-function harnesses(values: string[] | undefined) {
+function harnesses(values: string[], mod: SkillMod) {
   const result: HarnessId[] = [];
-  for (const value of values ?? []) {
-    const normalized = normalizeHarness(value);
+  for (const value of values) {
+    const normalized = mod.version === 2 && mod.declarations.some(({ id }) => id === value)
+      ? { name: value, warning: undefined }
+      : normalizeHarness(value);
     if (normalized.warning) console.error(normalized.warning);
     if (result.includes(normalized.name)) throw new CliUsageError(`duplicate harness ${normalized.name}`, "Select each harness once.");
     result.push(normalized.name);
@@ -114,9 +116,10 @@ type SourceOptionValues = {
   extraCommandRoot?: string[] | undefined;
 };
 function sourceArguments(options: SourceOptionValues) {
+  const project = discoverProject({ project: one(options.project, "--project"), sourceRoot: one(options.sourceRoot, "--source-root") });
   return {
-    project: discoverProject({ project: one(options.project, "--project"), sourceRoot: one(options.sourceRoot, "--source-root") }),
-    harnesses: options.harness ? harnesses(options.harness) : undefined,
+    project,
+    harnesses: options.harness ? harnesses(options.harness, project.mod) : undefined,
     format: options.format,
     overrides: assignments(options.override, "--override"),
     extraRoots: extraRoots(options.extraSkillRoot, options.extraCommandRoot),
@@ -170,7 +173,6 @@ export function createProgram() {
       const project = discoverProject({ project: one(options.project, "--project") });
       const migrated = await migrateProject(project);
       if (!migrated) { console.log(`${project.modPath} is already skillful 2`); return; }
-      for (const warning of migrated.warnings) console.error(`Warning: ${warning}`);
       console.log(`Migrated ${project.modPath} to skillful 2`);
     });
 
@@ -284,7 +286,7 @@ export function createProgram() {
       const project = discoverProject({ project: one(options.project, "--project"), sourceRoot: one(options.sourceRoot, "--source-root") });
       const result = renderProject(project, {
         setup,
-        harnesses: options.harness ? harnesses(options.harness) : undefined,
+        harnesses: options.harness ? harnesses(options.harness, project.mod) : undefined,
         out: one(options.out, "--out"),
         dryRun: options.dryRun,
         force: options.force,

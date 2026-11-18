@@ -178,8 +178,7 @@ let
           done
         '';
       in {
-        paths = facts.${name}.installPaths.home
-          // lib.optionalAttrs (manifest.version == 2 && name == "codex") { skills = ".codex/skills"; };
+        paths = if manifest.version == 2 then manifest.homeHarnessPaths.${name} else facts.${name}.installPaths.home;
         skills = if manifest.version == 1 then "${harnessRendered}/${name}/skills" else deliveredSkills;
         commands = "${harnessRendered}/${name}/commands";
         rules = "${harnessRendered}/${name}/rules.md";
@@ -190,13 +189,13 @@ let
     else
       let
         setup = setupDeclarations.${name};
-        shareSkills = manifest.version == 2 && builtins.any (harness: harness.name != "claude") setup.harnesses;
+        shareSkills = manifest.version == 2 && builtins.length (builtins.filter (harness: harness.readsShared) setup.harnesses) >= 2;
         resolvedHarnesses = map (harness:
-          if facts.${harness.name}.commandMerge == "skill" && harness.paths ? commands
+          if manifest.version == 2 then harness
+          else if facts.${harness.name}.commandMerge == "skill" && harness.paths ? commands
           then throw "skillful setup ${name} harness ${harness.name} does not support a commands path"
           else harness // {
             paths = facts.${harness.name}.installPaths.${setup.root}
-              // lib.optionalAttrs (manifest.version == 2 && harness.name == "codex") { skills = ".codex/skills"; }
               // harness.paths;
           }
         ) setup.harnesses;
