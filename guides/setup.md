@@ -28,10 +28,10 @@ Omit `root` to use each harness's home paths. `root project` selects its project
 paths; `--root DIR` relocates the selected profile when applying. Bare harness
 names use those conventional paths. A harness block contains only exceptions.
 
-Skillful 2 machine installs put identical skills in `.agents/skills` for Codex,
-Cursor, Grok, OpenCode, and Pi. Skills that differ or are skipped go only into the
-selected agents' own folders. Claude Code uses `.claude/skills`. Skillful 1
-setups keep their existing harness paths.
+Skillful 2 machine installs use `.agents/skills` only when at least two listed
+shared-folder agents get the same copy. Skills for a lone reader, or skills that
+differ or are skipped, go into the receiving agents' own folders. Claude Code
+always uses `.claude/skills`. Skillful 1 setups keep their existing harness paths.
 
 Codex, Cursor, Grok, and OpenCode project profiles do not claim `AGENTS.md`.
 Assign `rules AGENTS.md` explicitly to one harness when the project needs it.

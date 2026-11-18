@@ -25,7 +25,7 @@ export function resolveSetup(project: Project, name: string, options: ResolveOpt
   const setup = project.mod.setups[name]!;
   const facts = loadHarnesses();
   const v2 = project.mod.version === 2;
-  const sharedSkills = v2 && setup.harnesses.some(({ id }) => id !== "claude") ? sharedSkillsPath : undefined;
+  const sharedSkills = plan.placements.some(({ root }) => root === ".agents") ? sharedSkillsPath : undefined;
   const harnesses = setup.harnesses.map(({ id, paths }) => ({
     name: id,
     paths: resolveInstallPaths(facts[id], v2 && id === "codex" ? { skills: ".codex/skills", ...paths } : paths, setup.root),

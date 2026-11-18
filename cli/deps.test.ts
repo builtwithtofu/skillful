@@ -139,7 +139,7 @@ describe("dependency transactions and cache", () => {
     const after = run(project, cache, "render", "--out", "after");
     expect(after.exitCode, after.stderr.toString()).toBe(0);
     const oldRoot = join(project, "before/pi/skills");
-    const newRoot = join(project, "after/.agents/skills");
+    const newRoot = join(project, "after/.pi/agent/skills");
     expect(readdirSync(newRoot).sort()).toEqual(readdirSync(oldRoot).sort());
     for (const skill of readdirSync(oldRoot)) {
       expect(readFileSync(join(newRoot, skill, "SKILL.md"), "utf8")).toBe(readFileSync(join(oldRoot, skill, "SKILL.md"), "utf8"));
@@ -163,7 +163,7 @@ describe("dependency transactions and cache", () => {
     expect(readFileSync(lock, "utf8")).toBe(before);
     const render = run(project, cache, "render");
     expect(render.exitCode, render.stderr.toString()).toBe(0);
-    expect(readFileSync(join(project, "rendered/.agents/skills/skill-a/SKILL.md"), "utf8")).toContain("Project body.");
+    expect(readFileSync(join(project, "rendered/.pi/agent/skills/skill-a/SKILL.md"), "utf8")).toContain("Project body.");
   });
 
   test("full update reports missing path selections at the use line", () => {

@@ -123,10 +123,10 @@ Examples:
 export const RENDER_AFTER_HELP = `
 By default, render uses the agents in skillful 2 or the declared harnesses in
 skillful 1. Name a machine or setup to apply its skill selection. In skillful 2,
-identical skills share .agents/skills; Claude Code uses .claude/skills. A --harness
-render can regroup other already-rendered agents' skills and refresh their skill
-contracts, without touching their commands or rules. Only install writes live
-harness destinations.
+at least two shared-folder agents must get the same copy to use .agents/skills.
+Claude Code uses .claude/skills. A --harness render can regroup other already-
+rendered agents' skills and refresh their contracts without touching commands or
+rules. Only install writes live harness destinations.
 
 Examples:
   skillful render --dry-run
@@ -144,8 +144,9 @@ stale files. Named setups select home or project paths from their declared root.
 Skillful 2 selects the machine matching your short hostname unless you name one.
 Use only <skills> on <agents> "reason" in skill.mod to restrict who gets a skill.
 See skillful skills show mod for the manifest syntax.
-Machine installs share identical skills in .agents/skills; differing skills and
-Claude Code's skills use separate folders. Use --root to relocate. Only skillful 1
+Machine installs use .agents/skills only when at least two shared-folder agents
+get the same copy. A lone reader, differing skills, and Claude Code's skills use
+separate folders. Use --root to relocate. Only skillful 1
 supports one-off --harness installs and their --path overrides.
 --remove retires a named setup from its receipt;
 pass --root after deleting its declaration. Valid source overrides are ignored
