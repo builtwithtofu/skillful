@@ -91,16 +91,40 @@ angular-developer.description.append on pi = " Use the process tool for builds."
 
 Use `.body =` to replace the instructions or `.body.append =` to add text
 verbatim (include a leading newline if needed). Use `.body.replace` to swap an
-exact passage. Both operands can be quoted strings or project-relative paths.
+exact passage. Both operands can be quoted values or project-relative paths.
 Rendering stops if the passage does not appear exactly once.
 Body overrides are applied before fences are evaluated.
 
 ```text
 angular-developer.body = ./overlays/angular-developer-full.md
-angular-developer.body.append on pi = "\nRun `ng build` through the process tool.\n"
-ketchup.body.replace "Draw a Mermaid diagram of the flow." with "Describe the flow as a numbered list."
+angular-developer.body.append on pi = """
+
+  Run `ng build` through the process tool.
+
+  """
+ketchup.body.replace """
+  Draw a Mermaid diagram of the flow.
+  """ with """
+  <!-- only claude -->
+  Describe the flow as a numbered list.
+  <!-- end -->
+  <!-- skip claude -->
+  Draw a Mermaid sequence diagram of the flow.
+  <!-- end -->
+  """
 ```
 
+Use `"""` anywhere skillful 2 accepts a quoted value. The opener ends its line;
+start the closer on a new line. The directive can continue after the closer.
+Indent each nonempty content line with the same spaces or tabs as the closer;
+that prefix is stripped, and extra indentation is kept. Text is literal (no
+escapes), and the newlines next to the delimiters are not part of the value.
+Add a blank content line to include a leading or trailing newline.
+
+`skillful fmt` writes multiline values as blocks and single-line literals as
+JSON strings. It keeps JSON quoting if a value contains a carriage return or a
+line that would be read as the closing delimiter. HTML-comment fences in override
+bodies are evaluated per agent, just like fences in the original body.
 Every-agent overrides run first, then agent-specific ones, each in file order.
 The agent's existing front-matter rules still apply. Overrides require a skill
 selected by the project. Run `skillful update` to record the upstream fields and

@@ -99,7 +99,8 @@ function fail(filename: string, line: number, column: number, message: string, r
   throw new ModError(filename, line, column, message, `Recovery: ${recovery}`);
 }
 
-function tokensFor(raw: string, filename: string, line: number, compact = false): Token[] {
+const blockClose = /^([ \t]*)"""/;
+function tokensFor(raw: string, filename: string, line: number, cursor?: { lines: string[]; offset: number }): Token[] {
   const tokens: Token[] = [];
   let index = 0;
   while (index < raw.length) {
@@ -107,6 +108,26 @@ function tokensFor(raw: string, filename: string, line: number, compact = false)
     if (index === raw.length) break;
     const column = index + 1;
     if (raw[index] === '"') {
+      if (cursor && raw.startsWith('"""', index)) {
+        if (raw.slice(index + 3).trim()) fail(filename, line, column, "block opener must end its line", 'Put the value on the next line after """.');
+        const start = cursor.offset + 1;
+        let close: RegExpExecArray | null = null;
+        while (++cursor.offset < cursor.lines.length) {
+          close = blockClose.exec(cursor.lines[cursor.offset]!);
+          if (close) break;
+        }
+        if (!close) fail(filename, line, column, "unterminated block value", 'Start a closing """ at the beginning of a line; the rest of the directive can follow it.');
+        const indent = close[1]!;
+        const content = cursor.lines.slice(start, cursor.offset).map((text, i) => {
+          if (text && !text.startsWith(indent)) fail(filename, start + i + 1, 1, "block content does not match closing delimiter indentation", 'Indent the line to match the closing """.');
+          return text.slice(indent.length);
+        });
+        tokens.push({ value: content.join("\n"), column, quoted: true });
+        raw = cursor.lines[cursor.offset]!;
+        line = cursor.offset + 1;
+        index = close[0].length;
+        continue;
+      }
       let escaped = false;
       let end = index + 1;
       for (; end < raw.length; end++) {
@@ -123,11 +144,11 @@ function tokensFor(raw: string, filename: string, line: number, compact = false)
       continue;
     }
     let end = index + 1;
-    if (!compact || !v2Punctuation.test(raw[index]!)) {
-      while (end < raw.length && !/\s/.test(raw[end]!) && !(compact && (v2Punctuation.test(raw[end]!) || raw[end] === '"'))) end++;
+    if (!cursor || !v2Punctuation.test(raw[index]!)) {
+      while (end < raw.length && !/\s/.test(raw[end]!) && !(cursor && (v2Punctuation.test(raw[end]!) || raw[end] === '"'))) end++;
     }
     const value = raw.slice(index, end);
-    if (!compact && value !== "(" && value !== ")" && !barePattern.test(value)) fail(filename, line, column, `invalid bare token ${JSON.stringify(value)}`, "Use a quoted JSON string for whitespace, //, parentheses, or quotes.");
+    if (!cursor && value !== "(" && value !== ")" && !barePattern.test(value)) fail(filename, line, column, `invalid bare token ${JSON.stringify(value)}`, "Use a quoted JSON string for whitespace, //, parentheses, or quotes.");
     tokens.push({ value, column });
     index = end;
   }
@@ -347,7 +368,9 @@ function parseMod2(base: SkillModBase, lines: string[], start: number, filename:
     const trimmed = raw.trim();
     if (!trimmed) continue;
     if (trimmed.startsWith("//")) { pending.push(trimmed); mod.leadingComments.push(trimmed); continue; }
-    const [directive, ...args] = tokensFor(raw, filename, line, true);
+    const cursor = { lines, offset };
+    const [directive, ...args] = tokensFor(raw, filename, line, cursor);
+    offset = cursor.offset;
     const { value, column, quoted } = directive!;
     if (quoted) fail(filename, line, column, `unknown directive ${JSON.stringify(value)}`, "Write directive names without quotes.");
     const comments = pending;
@@ -466,7 +489,9 @@ function parseMod2(base: SkillModBase, lines: string[], start: number, filename:
         const isValue = (token: Token | undefined) => token && (token.quoted || words([token]));
         const target = { skill: field[1]!, field: field[2]!, ...(scoped ? { agent: agents([args[1]!])[0]! } : {}), comments, line };
         if (field[4] === "replace") {
-          if (operands.length !== 3 || !isValue(operands[0]) || !bare(operands[1], "with") || !isValue(operands[2])) syntax('<skill>.body.replace [on <agent>] "old" with "new"');
+          if (operands.length !== 3 || !isValue(operands[0]) || !bare(operands[1], "with") || !isValue(operands[2])) {
+            fail(filename, line, column, `invalid ${value} directive`, 'Use `<skill>.body.replace [on <agent>] "old" with "new"`. For a multiline operand, use a """ block.');
+          }
           mod.fieldOverrides.push({ ...target, operation: "replace", match: readValue(operands[0]!), value: readValue(operands[2]!) });
         } else {
           if (operands.length !== 2 || !bare(operands[0], "=") || !isValue(operands[1])) syntax('<skill>.<field>[.append] [on <agent>] = "value" or ./path');
@@ -491,15 +516,21 @@ function parseMod2(base: SkillModBase, lines: string[], start: number, filename:
 }
 
 function formatMod2(mod: SkillMod2): string {
-  const quote = (value: string) => value && !/[\s{}="]/.test(value) && !value.startsWith("//") ? value : JSON.stringify(value);
+  const string = (value: string, indent = "  ") => {
+    if (!value.includes("\n") || value.includes("\r")) return JSON.stringify(value);
+    const content = value.split("\n");
+    if (content.some((line) => blockClose.test(line))) return JSON.stringify(value);
+    return `"""\n${content.map((line) => line ? indent + line : "").join("\n")}\n${indent}"""`;
+  };
+  const quote = (value: string, indent?: string) => value && !/[\s{}="]/.test(value) && !value.startsWith("//") ? value : string(value, indent);
   const lines = [...mod.headerComments, "skillful 2"];
   const section = (entries: string[][]) => { if (entries.length) lines.push("", ...entries.flat()); };
   section([
     mod.rootDirectives.has("local") ? [...mod.rootComments.skills, `local ${quote(mod.roots.skills)} ${quote(mod.roots.commands)}`] : [],
     mod.rootDirectives.has("rules") ? [...mod.rootComments.rules, `rules ${quote(mod.roots.rules)}`] : [],
   ]);
-  section(mod.requires.map(({ ref, selectors, comments }) => [...comments, `use ${quote(ref)} { ${selectors.map(quote).join(" ")} }`]));
-  const overrideValue = (value: OverrideValue) => value.kind === "string" ? JSON.stringify(value.text) : value.text;
+  section(mod.requires.map(({ ref, selectors, comments }) => [...comments, `use ${quote(ref)} { ${selectors.map((name) => quote(name)).join(" ")} }`]));
+  const overrideValue = (value: OverrideValue) => value.kind === "string" ? string(value.text) : value.text;
   section(mod.fieldOverrides.map((item) => {
     const { skill, field, operation, agent, value, comments } = item;
     const target = `${skill}.${field}${operation === "set" ? "" : `.${operation}`}${agent ? ` on ${agent}` : ""}`;
@@ -507,14 +538,14 @@ function formatMod2(mod: SkillMod2): string {
   }));
   if (mod.agents.ids.length) section([[...mod.agents.comments, `agents ${mod.agents.ids.join(" ")}`]]);
   for (const [directive, selections] of [["only", mod.only], ["skip", mod.skips]] as const) {
-    section(selections.map(({ skills, agents, reason, comments }) => [...comments, `${directive} ${skills.map((skill) => skill === "on" ? JSON.stringify(skill) : quote(skill)).join(" ")} on ${agents.join(" ")} ${JSON.stringify(reason)}`]));
+    section(selections.map(({ skills, agents, reason, comments }) => [...comments, `${directive} ${skills.map((skill) => skill === "on" ? string(skill) : quote(skill)).join(" ")} on ${agents.join(" ")} ${string(reason)}`]));
   }
   const declaration = (entry: HarnessDeclaration, indent = "") => [
     ...entry.comments.map((comment) => indent + comment),
     `${indent}harness ${entry.id} {`,
     ...Object.entries(entry.paths).flatMap(([key, path]) => [
       ...(entry.pathComments[key as keyof SetupHarness["paths"]] ?? []).map((comment) => `${indent}  ${comment}`),
-      `${indent}  ${key} ${quote(path)}`,
+      `${indent}  ${key} ${quote(path, indent + "  ")}`,
     ]),
     ...(entry.readsShared ? [...(entry.sharedComments ?? []).map((comment) => `${indent}  ${comment}`), `${indent}  reads-shared`] : []),
     ...entry.closingComments.map((comment) => `${indent}  ${comment}`),
