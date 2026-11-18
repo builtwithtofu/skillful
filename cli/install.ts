@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import {
   chmodSync,
   copyFileSync,
@@ -16,10 +16,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
-import { sha256, type ResolveOptions } from "./contract.ts";
+import { harnessPlan, resolvePlan, sha256, sharedSkillsPath, type ResolveOptions } from "./contract.ts";
 import { HARNESS_IDS, type HarnessId } from "./mod.ts";
 import type { Project } from "./project.ts";
-import { renderProject } from "./render.ts";
+import { renderProject, writeHarnessArtifacts } from "./render.ts";
 import { loadHarnesses, type HarnessFacts } from "./harness.ts";
 import type { ResolvedSetup } from "./setup.ts";
 
@@ -236,9 +236,11 @@ function assertUnowned(destinationRoot: string, files: Iterable<string>, ignored
 function atomicWrite(source: string, target: string) {
   mkdirSync(dirname(target), { recursive: true });
   const temporary = join(dirname(target), `.${target.split(sep).at(-1)}.skillful-${randomUUID()}`);
-  copyFileSync(source, temporary);
-  chmodSync(temporary, lstatSync(source).mode & 0o777);
-  renameSync(temporary, target);
+  try {
+    copyFileSync(source, temporary);
+    chmodSync(temporary, lstatSync(source).mode & 0o777);
+    renameSync(temporary, target);
+  } finally { rmSync(temporary, { force: true }); }
 }
 function removeEmptyParents(path: string, root: string) {
   let current = dirname(path);
@@ -267,6 +269,7 @@ type ApplyInstallationOptions = {
   adoptions?: ReceiptSpec[] | undefined;
   owner: InstallOwner;
   artifacts: Map<string, string>;
+  sharedSkillConflicts?: string[];
   regions: string[];
   dryRun?: boolean | undefined;
   force?: boolean | undefined;
@@ -298,7 +301,7 @@ function applyInstallation(options: ApplyInstallationOptions): InstallResult {
       if (overlaps) receipts.push({ ...candidate, state });
     }
     for (const receipt of receipts) if (receipt.state) assertStateIdentity(receipt.state, receipt.path, options.projectRoot, options.destinationRoot, receipt.owner);
-    assertUnowned(options.destinationRoot, Object.keys(nextHashes), new Set(receipts.map((receipt) => receipt.path)), options.base, caseInsensitive);
+    assertUnowned(options.destinationRoot, [...Object.keys(nextHashes), ...(options.sharedSkillConflicts ?? [])], new Set(receipts.map((receipt) => receipt.path)), options.base, caseInsensitive);
     const oldHashes: Record<string, string> = {};
     for (const receipt of receipts) for (const [path, hash] of Object.entries(receipt.state?.files ?? {})) {
       if (oldHashes[path] && oldHashes[path] !== hash) fail(`conflicting installation ownership: ${path}`, "Move one receipt aside and inspect the destination before retrying.");
@@ -323,16 +326,36 @@ function applyInstallation(options: ApplyInstallationOptions): InstallResult {
       }
     }
     if (options.dryRun) return { root: options.destinationRoot, statePath: options.statePath, changes, dryRun: true };
-    for (const change of changes.filter((entry) => entry.action !== "delete")) atomicWrite(options.artifacts.get(change.path)!, verifyDestinationPath(options.destinationRoot, change.path));
-    for (const change of changes.filter((entry) => entry.action === "delete")) {
-      const target = verifyDestinationPath(options.destinationRoot, change.path);
-      if (existsSync(target)) { rmSync(target); removeEmptyParents(target, options.destinationRoot); }
-    }
     const state: InstallState = { schemaVersion: 1, projectRoot: options.projectRoot, ...options.owner, destinationRoot: options.destinationRoot, files: nextHashes };
     mkdirSync(dirname(options.statePath), { recursive: true });
     const tempState = `${options.statePath}.tmp-${randomUUID()}`;
-    writeFileSync(tempState, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-    renameSync(tempState, options.statePath);
+    const applied: Array<{ target: string; backup: string | undefined }> = [];
+    try {
+      writeFileSync(tempState, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+      for (const change of [...changes.filter(({ action }) => action === "delete"), ...changes.filter(({ action }) => action !== "delete")]) {
+        const target = verifyDestinationPath(options.destinationRoot, change.path);
+        const stat = lstatSync(target, { throwIfNoEntry: false });
+        const backup = stat && !stat.isDirectory() ? `${target}.skillful-backup-${randomUUID()}` : undefined;
+        if (backup) {
+          renameSync(target, backup);
+          applied.push({ target, backup });
+        }
+        if (change.action === "delete") continue;
+        atomicWrite(options.artifacts.get(change.path)!, target);
+        if (!backup) applied.push({ target, backup });
+      }
+      renameSync(tempState, options.statePath);
+    } catch (error) {
+      for (const { target, backup } of applied.reverse()) {
+        if (backup) renameSync(backup, target);
+        else { rmSync(target); removeEmptyParents(target, options.destinationRoot); }
+      }
+      throw error;
+    } finally { rmSync(tempState, { force: true }); }
+    for (const { target, backup } of applied) if (backup) {
+      rmSync(backup);
+      if (!existsSync(target)) removeEmptyParents(target, options.destinationRoot);
+    }
     for (const receipt of receipts) if (receipt.path !== options.statePath && receipt.state) {
       rmSync(receipt.path);
       removeEmptyParents(receipt.path, options.base);
@@ -352,17 +375,22 @@ export function installProject(project: Project, options: InstallOptions): Insta
   const projectRoot = realpathSync(project.root);
   const projectId = sha256(projectRoot);
   const rootId = sha256(destinationRoot);
-  const installPaths = resolveInstallPaths(loadHarnesses()[options.harness], options.paths);
+  const paths = project.mod.version === 2 && options.harness === "codex" ? { skills: ".codex/skills", ...options.paths } : options.paths;
+  const installPaths = resolveInstallPaths(loadHarnesses()[options.harness], paths);
   const base = stateBase(options.stateHome);
   const statePath = join(base, projectId, options.harness, `${rootId}.json`);
   const receipts: ReceiptSpec[] = [{ path: statePath, owner: { harness: options.harness } }];
   const adoptions = options.harness === "opencode" ? [retiredOpenCodeReceipt(base, projectId, rootId)] : [];
-  const renderName = `.skillful-install-${randomUUID()}`;
-  const renderRoot = join(project.root, renderName);
+  const renderRoot = join(tmpdir(), `.skillful-install-${randomUUID()}`);
   try {
-    renderProject(project, { harnesses: [options.harness], out: renderName, overrides: options.overrides, extraRoots: options.extraRoots, force: true });
+    const plan = resolvePlan(project, { ...options, harnesses: [options.harness] });
+    writeHarnessArtifacts(renderRoot, plan, options.harness, true);
     const regions = Object.values(installPaths).filter((path): path is string => Boolean(path));
-    return applyInstallation({ projectRoot, destinationRoot, base, statePath, receipts, adoptions, owner: { harness: options.harness }, artifacts: collectArtifacts(renderRoot, options.harness, installPaths), regions, dryRun: options.dryRun, force: options.force });
+    const harness = harnessPlan(plan, options.harness);
+    const sharedSkillConflicts = project.mod.version === 2 && options.harness !== "claude" && installPaths.skills === harness.profile.installPaths.skills
+      ? harness.skills.map(({ name }) => `${sharedSkillsPath}/${name}/SKILL.md`)
+      : [];
+    return applyInstallation({ projectRoot, destinationRoot, base, statePath, receipts, adoptions, owner: { harness: options.harness }, artifacts: collectArtifacts(renderRoot, options.harness, installPaths), regions, sharedSkillConflicts, dryRun: options.dryRun, force: options.force });
   } finally { rmSync(renderRoot, { recursive: true, force: true }); }
 }
 
@@ -373,13 +401,13 @@ export function installSetup(project: Project, setup: ResolvedSetup, options: In
   const rootId = sha256(destinationRoot);
   const base = stateBase(options.stateHome);
   const statePath = setupStatePath(base, projectId, setup.name, rootId);
-  const renderName = `.skillful-install-${randomUUID()}`;
-  const renderRoot = join(project.root, renderName);
+  const renderRoot = join(tmpdir(), `.skillful-install-${randomUUID()}`);
   try {
-    renderProject(project, { setup: setup.name, out: renderName, overrides: options.overrides, extraRoots: options.extraRoots, force: true });
+    renderProject(project, { setup: setup.name, out: renderRoot, overrides: options.overrides, extraRoots: options.extraRoots, force: true });
     const artifacts = new Map(Object.entries(setup.files).map(([destination, file]) => [destination, join(renderRoot, file.artifact)]));
     const adoptions = setup.harnesses.some((harness) => harness.name === "opencode") ? [retiredOpenCodeReceipt(base, projectId, rootId)] : [];
     const regions = setup.harnesses.flatMap((harness) => Object.values(harness.paths).filter((path): path is string => Boolean(path)));
+    if (setup.sharedSkills) regions.push(setup.sharedSkills);
     return applyInstallation({ projectRoot, destinationRoot, base, statePath, receipts: [{ path: statePath, owner: { setup: setup.name } }], adoptions, owner: { setup: setup.name }, artifacts, regions, dryRun: options.dryRun, force: options.force });
   } finally { rmSync(renderRoot, { recursive: true, force: true }); }
 }

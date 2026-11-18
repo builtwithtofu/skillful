@@ -246,11 +246,14 @@
               skillful render travel --project ${self}/tests/fixtures/machine-project --source-root ${self} \
                 --override "github:angular/skills@main=${githubTree.outPath}" --out "$TMPDIR/travel-cli"
               diff -r ${travelSetup.rendered} "$TMPDIR/travel-cli"
-              test -f ${travelSetup.rendered}/pi/skills/angular-developer/SKILL.md
-              test ! -e ${travelSetup.rendered}/claude/skills/angular-developer
-              test -f ${travelSetup.rendered}/claude/skills/local/SKILL.md
-              test ! -e ${travelSetup.rendered}/pi/skills/desk-only
-              test ! -e ${travelSetup.rendered}/claude/skills/desk-only
+              test -f ${travelSetup.rendered}/.agents/skills/angular-developer/SKILL.md
+              test ! -e ${travelSetup.rendered}/.claude/skills/angular-developer
+              test -f ${travelSetup.rendered}/.claude/skills/local/SKILL.md
+              test ! -e ${travelSetup.rendered}/.agents/skills/desk-only
+              test -f ${(machineFixture.forHarness "pi").skills}/angular-developer/SKILL.md
+              test -f ${(machineFixture.forHarness "claude").skills}/local/SKILL.md
+              test ! -e ${(machineFixture.forHarness "claude").skills}/angular-developer
+              test ! -e ${travelSetup.rendered}/.claude/skills/desk-only
 
               for project in ${./tests/fixtures/setup-mod/unsafe} ${./tests/fixtures/setup-mod/mixed} ${./tests/fixtures/setup-mod/root-home}; do
                 if skillful fmt --check --project "$project"; then exit 1; fi
@@ -264,9 +267,19 @@
               test -f ${workSetup.rendered}/claude/skills/hidden/SKILL.md
               test -f ${uppercaseSetup.rendered}/pi/skills/Upper/SKILL.md
               test ! -e ${uppercaseSetup.rendered}/pi/skills/example
+              test -f ${personalSetup.harnesses.pi.skills}/example/SKILL.md
+              test -f ${personalSetup.harnesses.pi.skills}/Upper/SKILL.md
               test -f ${personalHome}/.pi/agent/skills/example/SKILL.md
+              test -f ${personalHome}/.pi/agent/skills/example/references/guide.md
               test ! -e ${personalHome}/.pi/agent/skills/hidden
+              test -f ${personalHome}/.claude/skills/example/SKILL.md
+              test -f ${workProject}/.opencode/skills/hidden/SKILL.md
+              test -f ${workProject}/.pi/agent/skills/example/SKILL.md
+              test -f ${workProject}/.opencode/skills/example/SKILL.md
               test -f ${workProject}/.claude2/skills/hidden/SKILL.md
+              mkdir "$TMPDIR/work-cli"
+              XDG_STATE_HOME="$TMPDIR/install-state" skillful install work-mac --project ${./tests/fixtures/setup-project} --root "$TMPDIR/work-cli"
+              diff -r ${workProject} "$TMPDIR/work-cli"
               test ${pkgs.lib.escapeShellArg workSetup.root} = project
               touch "$out"
             '';

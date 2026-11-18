@@ -73,6 +73,107 @@ harness pi (
     expect(existsSync(join(project, "rendered", "codex"))).toBe(false);
   });
 
+  test("a fresh targeted render never shares a skill skipped by another declared reader", () => {
+    const { project } = fixture();
+    writeFileSync(join(project, "skill.mod"), 'skillful 2\nagents codex pi\nskip example on codex "Pi only."\n');
+    writeFileSync(join(project, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example\n---\n");
+    const manifest = discoverProject({ project });
+    const assertPrivate = () => {
+      expect(existsSync(join(project, "rendered", ".agents", "skills", "example"))).toBe(false);
+      expect(existsSync(join(project, "rendered", ".pi", "agent", "skills", "example", "SKILL.md"))).toBe(true);
+    };
+    renderProject(manifest, { harnesses: ["pi"] });
+    assertPrivate();
+    renderProject(manifest);
+    renderProject(manifest, { harnesses: ["pi"] });
+    assertPrivate();
+  });
+
+  test("a targeted shared-skill render leaves other harness commands alone", () => {
+    const { project } = fixture();
+    writeFileSync(join(project, "skill.mod"), "skillful 2\nagents codex pi\n");
+    writeFileSync(join(project, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example\n---\n");
+    const prompt = join(project, "commands", "standalone.md");
+    const piCommand = join(project, "rendered", "pi", "commands", "standalone.md");
+    const manifest = discoverProject({ project });
+    writeFileSync(prompt, "First prompt.\n");
+    renderProject(manifest);
+    writeFileSync(prompt, "Second prompt.\n");
+    renderProject(manifest, { harnesses: ["codex"] });
+    expect(text(piCommand)).toBe("First prompt.\n");
+    expect(text(join(project, "rendered", "codex", "skills", "standalone", "SKILL.md"))).toContain("Second prompt.");
+    writeFileSync(piCommand, "Local edit.\n");
+    writeFileSync(prompt, "{{#pi}}\n{{undefined_for_pi}}\n{{/}}\nCodex prompt.\n");
+    renderProject(manifest, { harnesses: ["codex"] });
+    expect(text(piCommand)).toBe("Local edit.\n");
+  });
+
+  test("regrouping refreshes retained skill contracts without rerendering commands or rules", () => {
+    const { project } = fixture();
+    const mod = join(project, "skill.mod");
+    const header = "skillful 2\nagents codex pi\n";
+    writeFileSync(mod, header);
+    writeFileSync(join(project, "skills/example/SKILL.md"), "Default body.\n");
+    renderProject(discoverProject({ project }));
+    const out = join(project, "rendered");
+    const piContractPath = join(out, "pi/.skillful/contract.json");
+    const pi = () => JSON.parse(text(piContractPath)).manifest.harnesses.pi;
+    const before = pi();
+    expect(before.skills[0].delivery.path).toBe(".agents/skills/example/SKILL.md");
+    const command = join(out, "pi/commands/standalone.md");
+    const rules = join(out, "pi/rules.md");
+    const beforeRules = text(rules);
+    writeFileSync(command, "Locally edited prompt.\n");
+    writeFileSync(mod, header + 'example.body on pi = "Pi instructions."\n');
+
+    const result = renderProject(discoverProject({ project }), { harnesses: ["codex"] });
+    const regrouped = pi();
+    const skill = regrouped.skills[0];
+    expect(skill.delivery.path).toBe(".pi/agent/skills/example/SKILL.md");
+    expect(text(join(out, skill.delivery.path))).toBe(skill.body);
+    expect(skill.body).toBe("Pi instructions.");
+    expect(skill.supportFiles[0].delivery.path).toBe(".pi/agent/skills/example/references/guide.md");
+    expect(existsSync(join(out, skill.supportFiles[0].delivery.path))).toBe(true);
+    expect(existsSync(join(out, before.skills[0].delivery.path))).toBe(false);
+    expect(result.changes).toContainEqual({ path: "pi/.skillful/contract.json", action: "change" });
+    expect(regrouped.commands).toEqual(before.commands);
+    expect(regrouped.rules).toEqual(before.rules);
+    expect(text(command)).toBe("Locally edited prompt.\n");
+    expect(text(rules)).toBe(beforeRules);
+    expect(() => renderProject(discoverProject({ project }), { harnesses: ["pi"] })).toThrow("managed render file was modified: pi/commands/standalone.md");
+    writeFileSync(command, before.commands[0].body);
+    renderProject(discoverProject({ project }), { harnesses: ["pi"] });
+  });
+
+  test("shares identical skills and removes stale shared copies when selection or front matter differs", () => {
+    const { project } = fixture();
+    const mod = join(project, "skill.mod");
+    const source = join(project, "skills", "example", "SKILL.md");
+    const header = "skillful 2\nagents claude codex pi\n";
+    const plain = "---\nname: example\ndescription: Example\n";
+    const skill = (folder: string) => join(project, "rendered", folder, "skills", "example", "SKILL.md");
+    const render = () => renderProject(discoverProject({ project }));
+    writeFileSync(source, plain + "---\n");
+    writeFileSync(mod, header);
+    render();
+    expect(existsSync(skill(".agents"))).toBe(true);
+    expect(existsSync(skill(".claude"))).toBe(true);
+    expect(existsSync(skill(".codex"))).toBe(false);
+    expect(existsSync(skill(".pi/agent"))).toBe(false);
+
+    writeFileSync(mod, header + 'skip example on codex "Pi only among shared agents."\n');
+    renderProject(discoverProject({ project }), { harnesses: ["codex"] });
+    expect(existsSync(skill(".agents"))).toBe(false);
+    expect(existsSync(skill(".codex"))).toBe(false);
+    expect(existsSync(skill(".pi/agent"))).toBe(true);
+
+    writeFileSync(mod, header);
+    writeFileSync(source, plain + "disable-model-invocation: true\n---\n");
+    render();
+    expect(existsSync(skill(".agents"))).toBe(false);
+    expect(text(skill(".pi/agent"))).toContain("disable-model-invocation: true");
+    expect(text(skill(".codex"))).not.toContain("disable-model-invocation");
+  });
   test("renders Codex skills, fences, and standalone commands as skills", () => {
     const { project, resolved } = fixture();
 

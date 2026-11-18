@@ -34,6 +34,12 @@ function fixture() {
   return { root, project, dependency, cache, ref: `git:file://${dependency}@main` };
 }
 
+function run(project: string, cache: string, ...args: string[]) {
+  return Bun.spawnSync(["bun", join(import.meta.dir, "main.ts"), ...args], {
+    cwd: project, env: { ...process.env, XDG_CACHE_HOME: cache }, stdout: "pipe", stderr: "pipe",
+  });
+}
+
 describe("dependency references", () => {
   test("parses canonical GitHub, Git, and path identities", () => {
     expect(parseRef("github:Owner/Repo/skills@main").identity).toBe("github:owner/repo/skills");
@@ -109,6 +115,65 @@ describe("dependency transactions and cache", () => {
     git(dependency, "commit", "-m", "move branch");
     await updateDependencies(discoverProject({ project }), ["dep"], cache);
     expect(readLock(project)[0]!.rev).not.toBe(oldRev);
+  });
+
+  test.each(["merge", "drop"])("migrate can %s locked requirements without moving the retained pin", (mode) => {
+    const { project, dependency, ref, cache } = fixture();
+    writeFileSync(join(project, "skills/example/SKILL.md"), "Local body.\n");
+    const requirements = mode === "merge"
+      ? `require ${JSON.stringify(ref)} as first (\n  only skill-a\n)\nrequire ${JSON.stringify(ref)} as second (\n  only skill-b\n)`
+      : `require ${JSON.stringify(ref)} as unused (\n  exclude skill-a\n  exclude skill-b\n)`;
+    const mod = join(project, "skill.mod");
+    writeFileSync(mod, `skillful 1\nharness pi (\n)\n${requirements}\n`);
+    const updated = run(project, cache, "update");
+    expect(updated.exitCode, updated.stderr.toString()).toBe(0);
+    const pin = readLock(project)[0]!;
+    git(dependency, "branch", "-m", "retired");
+    const before = run(project, cache, "render", "--out", "before");
+    expect(before.exitCode, before.stderr.toString()).toBe(0);
+
+    const migrated = run(project, cache, "migrate");
+    expect(migrated.exitCode, migrated.stderr.toString()).toBe(0);
+    expect(readFileSync(mod, "utf8")).toStartWith("skillful 2\n");
+    expect(readLock(project, false)).toEqual(mode === "merge" ? [pin] : []);
+    const after = run(project, cache, "render", "--out", "after");
+    expect(after.exitCode, after.stderr.toString()).toBe(0);
+    const oldRoot = join(project, "before/pi/skills");
+    const newRoot = join(project, "after/.agents/skills");
+    expect(readdirSync(newRoot).sort()).toEqual(readdirSync(oldRoot).sort());
+    for (const skill of readdirSync(oldRoot)) {
+      expect(readFileSync(join(newRoot, skill, "SKILL.md"), "utf8")).toBe(readFileSync(join(oldRoot, skill, "SKILL.md"), "utf8"));
+    }
+  });
+
+  test("full update leaves the working lock when a new revision loses a selected skill", () => {
+    const { project, dependency, ref, cache } = fixture();
+    writeFileSync(join(project, "skills/example/SKILL.md"), "Local body.\n");
+    writeFileSync(join(project, "skill.mod"), `skillful 2\nagents pi\nuse ${ref} { skill-a }\nskill-a.body = "Project body."\n`);
+    const updated = run(project, cache, "update");
+    expect(updated.exitCode, updated.stderr.toString()).toBe(0);
+    const lock = join(project, "skill.lock");
+    const before = readFileSync(lock, "utf8");
+    git(dependency, "rm", "-r", "skill-a");
+    git(dependency, "commit", "-m", "remove skill-a");
+
+    const failed = run(project, cache, "update");
+    expect(failed.exitCode, failed.stderr.toString()).toBe(1);
+    expect(failed.stderr.toString()).toContain("skill.mod:3:1: unknown skill skill-a in use");
+    expect(readFileSync(lock, "utf8")).toBe(before);
+    const render = run(project, cache, "render");
+    expect(render.exitCode, render.stderr.toString()).toBe(0);
+    expect(readFileSync(join(project, "rendered/.agents/skills/skill-a/SKILL.md"), "utf8")).toContain("Project body.");
+  });
+
+  test("full update reports missing path selections at the use line", () => {
+    const { root, project, cache } = fixture();
+    git(root, "init", "-b", "main");
+    writeFileSync(join(project, "skill.mod"), "skillful 2\nagents pi\nuse path:../dependency { missing }\n");
+    const result = run(project, cache, "update");
+    expect(result.exitCode, result.stderr.toString()).toBe(1);
+    expect(result.stderr.toString()).toContain("skill.mod:3:1: unknown skill missing in use path:../dependency");
+    expect(existsSync(join(project, "skill.lock"))).toBe(false);
   });
 
   test("add writes a use declaration for named skills without changing the manifest version", async () => {

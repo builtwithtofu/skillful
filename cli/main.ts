@@ -269,7 +269,7 @@ export function createProgram() {
     .description("Render a managed build tree without installing it.")
     .addHelpText("after", RENDER_AFTER_HELP)
     .argument("[setup]", "named setup or machine; omit to use the default agents")
-    .addOption(new Option("--harness <harness>", "render only this harness; repeatable").argParser(collect))
+    .addOption(new Option("--harness <harness>", "select a harness to render; repeatable").argParser(collect))
     .addOption(new Option("--out <directory>", "managed output directory (default: ./rendered)").argParser(collect))
     .addOption(new Option("--project <directory>", "project directory").argParser(collect))
     .addOption(internalRootOption("--source-root <directory>", "source workspace containing the project"))

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { cacheKey, narHash } from "./nar.ts";
@@ -11,7 +11,127 @@ const run = (cwd: string, ...args: string[]) => Bun.spawnSync(["bun", join(impor
 const runIn = (cwd: string, home: string, ...args: string[]) => Bun.spawnSync(["bun", join(import.meta.dir, "main.ts"), ...args], { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, XDG_STATE_HOME: join(home, ".state") } });
 const output = (result: ReturnType<typeof run>) => ({ stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) });
 
+function piClaudeRenderFiles(dir: string) {
+  return Object.fromEntries(readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && !entry.parentPath.endsWith(".skillful"))
+    .map((entry) => {
+      const path = join(entry.parentPath, entry.name);
+      const name = relative(dir, path).replaceAll("\\", "/")
+        .replace(/^\.claude\//, "claude/").replace(/^\.agents\//, "pi/");
+      return [name, readFileSync(path)];
+    }));
+}
+
 describe("project CLI", () => {
+  function machineFixture() {
+    const project = temp();
+    expect(run(project, "init").exitCode).toBe(0);
+    writeFileSync(join(project, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example\n---\nDefault body.\n");
+    const header = "skillful 2\nagents codex pi\nmachine desk\n";
+    const mod = join(project, "skill.mod");
+    const split = () => writeFileSync(mod, header + 'example.body on pi = "Pi instructions."\n');
+    writeFileSync(mod, header);
+    return { project, home: temp(), split };
+  }
+
+  test("one-off Codex and Pi installs keep differing instructions out of the shared folder", () => {
+    const { project, home, split } = machineFixture();
+    split();
+    for (const harness of ["codex", "pi", "codex", "pi"]) {
+      const result = runIn(project, home, "install", "--harness", harness, "--root", home);
+      expect(result.exitCode, output(result).stderr).toBe(0);
+    }
+    expect(readFileSync(join(home, ".codex/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
+    expect(readFileSync(join(home, ".pi/agent/skills/example/SKILL.md"), "utf8")).toContain("Pi instructions.");
+    expect(existsSync(join(home, ".agents/skills/example"))).toBe(false);
+  });
+
+  test("a one-off install refuses to duplicate a machine-owned shared skill", () => {
+    const { project, home } = machineFixture();
+    const mod = join(project, "skill.mod");
+    writeFileSync(mod, "skillful 2\nagents pi\nmachine desk\n");
+    expect(runIn(project, home, "install", "desk", "--root", home).exitCode).toBe(0);
+    writeFileSync(mod, 'skillful 2\nagents pi codex\nmachine desk\nexample.body on codex = "Codex instructions."\n');
+
+    const result = runIn(project, home, "install", "--harness", "codex", "--root", home);
+    expect(result.exitCode, output(result).stderr).toBe(1);
+    expect(output(result).stderr).toContain(".agents/skills/example/SKILL.md");
+    expect(readFileSync(join(home, ".agents/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
+    expect(existsSync(join(home, ".codex/skills/example/SKILL.md"))).toBe(false);
+    expect(runIn(project, home, "install", "desk", "--root", home).exitCode).toBe(0);
+  });
+
+  test("render and install honor a skip for a shared reader outside the agents list", () => {
+    const { project, home } = machineFixture();
+    writeFileSync(join(project, "skill.mod"), 'skillful 2\nagents pi\nskip example on codex "Pi only."\nmachine desk\n');
+    const rendered = run(project, "render", "--harness", "pi");
+    expect(rendered.exitCode, output(rendered).stderr).toBe(0);
+    const installed = runIn(project, home, "install", "desk", "--root", home);
+    expect(installed.exitCode, output(installed).stderr).toBe(0);
+    for (const root of [join(project, "rendered"), home]) {
+      expect(existsSync(join(root, ".agents/skills/example/SKILL.md"))).toBe(false);
+      expect(readFileSync(join(root, ".pi/agent/skills/example/SKILL.md"), "utf8")).toContain("Default body.");
+    }
+  });
+
+  test("incompatible front matter gets the same private placement with LF or CRLF", () => {
+    const { project, home } = machineFixture();
+    const source = "---\nname: example\ndescription: Example\ndisable-model-invocation: true\n---\nDefault body.\n";
+    for (const newline of ["\n", "\r\n"]) {
+      writeFileSync(join(project, "skills/example/SKILL.md"), source.replaceAll("\n", newline));
+      const rendered = run(project, "render", "desk");
+      expect(rendered.exitCode, output(rendered).stderr).toBe(0);
+      const installed = runIn(project, home, "install", "desk", "--root", home);
+      expect(installed.exitCode, output(installed).stderr).toBe(0);
+      for (const root of [join(project, "rendered"), home]) {
+        expect(existsSync(join(root, ".agents/skills/example/SKILL.md")), JSON.stringify(newline)).toBe(false);
+        expect(readFileSync(join(root, ".pi/agent/skills/example/SKILL.md"), "utf8")).toContain("disable-model-invocation: true");
+        expect(readFileSync(join(root, ".codex/skills/example/SKILL.md"), "utf8")).not.toContain("disable-model-invocation");
+      }
+    }
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a failed skill split leaves the shared install intact and can be retried", () => {
+    const { project, home, split } = machineFixture();
+    const install = () => runIn(project, home, "install", "desk", "--root", home);
+    expect(install().exitCode).toBe(0);
+    split();
+    const shared = join(home, ".agents/skills/example/SKILL.md");
+    const codex = join(home, ".codex/skills/example/SKILL.md");
+    const pi = join(home, ".pi/agent/skills/example/SKILL.md");
+    const readOnly = join(home, ".pi/agent");
+    chmodSync(readOnly, 0o555);
+    try {
+      const failure = install();
+      expect(failure.exitCode).not.toBe(0);
+      expect(readFileSync(shared, "utf8")).toContain("Default body.");
+      expect(existsSync(codex)).toBe(false);
+      expect(existsSync(pi)).toBe(false);
+    } finally { chmodSync(readOnly, 0o755); }
+    const retry = install();
+    expect(retry.exitCode, output(retry).stderr).toBe(0);
+    expect(existsSync(shared)).toBe(false);
+    expect(existsSync(codex)).toBe(true);
+    expect(existsSync(pi)).toBe(true);
+  });
+
+  test("a machine render contract points at the shared and private installed files", () => {
+    const { project, home, split } = machineFixture();
+    for (const [codex, pi] of [[".agents/skills", ".agents/skills"], [".codex/skills", ".pi/agent/skills"]]) {
+      expect(run(project, "render", "desk").exitCode).toBe(0);
+      expect(runIn(project, home, "install", "desk", "--root", home).exitCode).toBe(0);
+      const { manifest } = JSON.parse(readFileSync(join(project, "rendered/codex/.skillful/contract.json"), "utf8"));
+      for (const [id, root] of [["codex", codex], ["pi", pi]]) {
+        const skill = manifest.harnesses[id!].skills.find((item: { name: string }) => item.name === "example");
+        expect(skill.delivery.path).toBe(`${root}/example/SKILL.md`);
+        expect(existsSync(join(home, skill.delivery.path))).toBe(true);
+        expect(skill.supportFiles[0].delivery.path).toBe(`${root}/example/references/guide.md`);
+        expect(existsSync(join(home, skill.supportFiles[0].delivery.path))).toBe(true);
+      }
+      split();
+    }
+  });
+
   test("renders skillful 2 front-matter overrides before agent field filtering", () => {
     const root = temp();
     expect(run(root, "init").exitCode).toBe(0);
@@ -31,12 +151,12 @@ angular-developer.when_to_use = "On Angular projects"
     expect(run(root, "fmt").exitCode).toBe(0);
     const result = run(root, "render");
     expect(result.exitCode, output(result).stderr).toBe(0);
-    const rendered = (agent: string) => readFileSync(join(root, "rendered", agent, "skills", "angular-developer", "SKILL.md"), "utf8");
-    expect(rendered("pi")).toContain("description: Angular guidance Not for other frontends. Pi only.\n");
-    expect(rendered("claude")).toContain("description: Angular guidance Not for other frontends.\n");
-    expect(rendered("claude")).toContain("when_to_use: On Angular projects");
-    expect(rendered("pi")).not.toContain("when_to_use");
-    expect(rendered("pi")).toEndWith("\n\nOriginal instructions.\n");
+    const rendered = (folder: string) => readFileSync(join(root, "rendered", folder, "skills", "angular-developer", "SKILL.md"), "utf8");
+    expect(rendered(".agents")).toContain("description: Angular guidance Not for other frontends. Pi only.\n");
+    expect(rendered(".claude")).toContain("description: Angular guidance Not for other frontends.\n");
+    expect(rendered(".claude")).toContain("when_to_use: On Angular projects");
+    expect(rendered(".agents")).not.toContain("when_to_use");
+    expect(rendered(".agents")).toEndWith("\n\nOriginal instructions.\n");
     expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toContain("description: Upstream");
   });
 
@@ -65,11 +185,11 @@ angular-developer.when_to_use = "On Angular projects"
     const render = () => Bun.spawnSync(["bun", join(import.meta.dir, "main.ts"), "render", "--force"], { cwd: root, env: { ...process.env, XDG_CACHE_HOME: join(root, ".cache") } });
     const result = render();
     expect(result.exitCode, output(result).stderr).toBe(0);
-    const rendered = (agent: string) => readFileSync(join(root, "rendered", agent, "skills", "ketchup", "SKILL.md"), "utf8");
-    expect(rendered("pi")).toEndWith("description: Ketchup\n---\n\nUse a short list.\n");
-    expect(rendered("claude")).toEndWith("description: Ketchup\n---\n\nWrite a paragraph.\nKeep it short.\n");
-    expect(rendered("codex")).toEndWith("\n\nDescribe the flow as a numbered list.\n");
-    expect(readFileSync(join(root, "rendered", "pi", "skills", "example", "SKILL.md"), "utf8")).toEndWith("\n---\nNew instructions.");
+    const rendered = (folder: string) => readFileSync(join(root, "rendered", folder, "skills", "ketchup", "SKILL.md"), "utf8");
+    expect(rendered(".pi/agent")).toEndWith("description: Ketchup\n---\n\nUse a short list.\n");
+    expect(rendered(".claude")).toEndWith("description: Ketchup\n---\n\nWrite a paragraph.\nKeep it short.\n");
+    expect(rendered(".codex")).toEndWith("\n\nDescribe the flow as a numbered list.\n");
+    expect(readFileSync(join(root, "rendered", ".agents", "skills", "example", "SKILL.md"), "utf8")).toEndWith("\n---\nNew instructions.");
     for (const before of ['ketchup.body = "No diagram."\n', `ketchup.body.append = ${JSON.stringify(passage)}\n`]) {
       writeFileSync(mod, header + before + replacement);
       const failure = render();
@@ -353,9 +473,7 @@ setup laptop (
       expect(output(result).stderr).toBe("");
       expect(result.exitCode).toBe(0);
       const before = join(root, `before-${setup.join()}`);
-      const diff = Bun.spawnSync(["diff", "-r", "-x", ".skillful", before, after]);
-      expect(output(diff).stdout).toBe("");
-      expect(diff.exitCode).toBe(0);
+      expect(piClaudeRenderFiles(after)).toEqual(piClaudeRenderFiles(before));
     }
   });
 
@@ -517,18 +635,12 @@ skip hidden on claude "Pi only."
 machine work
 machine personal skip foreign example
 `);
-    const delivered = (dir: string) => Object.fromEntries(readdirSync(dir, { recursive: true, withFileTypes: true })
-      .filter((entry) => entry.isFile() && !entry.parentPath.endsWith(".skillful"))
-      .map((entry) => {
-        const path = join(entry.parentPath, entry.name);
-        return [relative(dir, path), readFileSync(path)];
-      }));
     for (const [i, args] of targets.entries()) {
       const result = run(root, "render", ...args, "--out", `v2-${i}`);
       expect(result.exitCode, output(result).stderr).toBe(0);
       const before = join(root, `v1-${i}`);
       const after = join(root, `v2-${i}`);
-      expect(delivered(after)).toEqual(delivered(before));
+      expect(piClaudeRenderFiles(after)).toEqual(piClaudeRenderFiles(before));
     }
   });
 
@@ -557,6 +669,10 @@ machine personal skip foreign example
     const unknown = run(root, "fmt", "--harness", "pi");
     expect(unknown.exitCode).toBe(2);
     expect(output(unknown).stderr).toBe("Error: unknown option '--harness'\nRecovery: Run `skillful --help` or `skillful <command> --help`.\n");
+
+    const perHarness = run(root, "render", "--per-harness");
+    expect(perHarness.exitCode).toBe(2);
+    expect(output(perHarness).stderr).toContain("unknown option '--per-harness'");
 
     const excess = run(root, "manifest", "extra", "args");
     expect(excess.exitCode).toBe(2);
