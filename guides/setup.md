@@ -1,9 +1,10 @@
 # setup
 
-A setup names a configuration for one machine. Skillful never chooses one from
-the hostname. In skillful 2, `machine personal skip company-database` uses the
-listed `agents` and skips that skill for all of them. Use `render personal` or
-`setup show personal` to select it.
+In skillful 2, `skillful install` selects the machine matching your lowercase
+short hostname. If none matches, it lists the declared machines. To select one
+explicitly, run `skillful install personal`. `machine personal skip
+company-database` uses the listed `agents` and skips that skill for all of them.
+Preview the machine with `render personal` or `setup show personal`.
 
 Skillful 1 uses setup blocks for skill selection, harness outputs, root kind,
 and path exceptions:
@@ -34,8 +35,8 @@ setups keep their existing harness paths.
 
 Codex, Cursor, Grok, and OpenCode project profiles do not claim `AGENTS.md`.
 Assign `rules AGENTS.md` explicitly to one harness when the project needs it.
-One-off `install --harness` uses home paths, with `--root` as relocation. For
-skillful 2 it uses separate skills folders, including `.codex/skills` for Codex.
+Only skillful 1 supports one-off `install --harness`. It uses home paths, with
+`--root` as relocation.
 
 Use repeated `only-skill <name>` or repeated `omit-skill <name> <reason>`, never
 both. Selection names are exact. Omitting a skill also removes its support files
@@ -51,8 +52,7 @@ skillful install old-work --remove --dry-run
 skillful install old-work --remove
 ```
 
-`render` is a managed build tree. Only `install` writes live destinations. Use
-`install --harness` for a one-off harness instead of a declared machine setup.
+`render` is a managed build tree. Only `install` writes live destinations.
 Use `install <name> --remove` to retire an instance from its ownership receipt.
 After deleting its declaration, pass the exact original `--root`. Valid source
 overrides are ignored during removal; destinations come only from the receipt.

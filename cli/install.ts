@@ -226,7 +226,7 @@ function assertUnowned(destinationRoot: string, files: Iterable<string>, ignored
         if (pathConflict(entry.target, ownershipTarget(sibling.destinationRoot, owned), caseInsensitive)) {
           fail(
             `destination already owned by another installation: ${entry.file}`,
-            `Owned by ${stateOwner(sibling)} at ${sibling.destinationRoot} from ${sibling.projectRoot}. Choose another --path or --root.`,
+            `Owned by ${stateOwner(sibling)} at ${sibling.destinationRoot} from ${sibling.projectRoot}. ${sibling.setup ? `Remove it with \`skillful install ${sibling.setup} --remove --root ${sibling.destinationRoot}\` from that project` : `It is a one-agent install: add ${sibling.harness} back to agents, run skillful install, then remove it and run skillful install again`}, or choose another --root.`,
           );
         }
       }

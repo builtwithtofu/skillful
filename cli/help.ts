@@ -141,11 +141,10 @@ export const INSTALL_AFTER_HELP = `
 The only command that writes live harness destinations. Records exclusive
 ownership, refuses unmanaged or edited collisions, and removes only unchanged
 stale files. Named setups select home or project paths from their declared root.
-In skillful 2, named machine installs share identical skills in .agents/skills.
-Differing skills, Claude Code's skills, and one-off --harness installs use
-separate folders. Use --root to relocate and --path for a nonstandard layout.
-A one-off install refuses to duplicate a skill owned in the shared folder; rerun
-its machine install to switch layouts.
+Skillful 2 selects the machine matching your short hostname unless you name one.
+Machine installs share identical skills in .agents/skills; differing skills and
+Claude Code's skills use separate folders. Use --root to relocate. Only skillful 1
+supports one-off --harness installs and their --path overrides.
 --remove retires a named setup from its receipt;
 pass --root after deleting its declaration. Valid source overrides are ignored
 during removal because destination ownership comes only from the receipt. Removal
