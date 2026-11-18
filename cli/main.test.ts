@@ -12,6 +12,56 @@ const runIn = (cwd: string, home: string, ...args: string[]) => Bun.spawnSync(["
 const output = (result: ReturnType<typeof run>) => ({ stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) });
 
 describe("project CLI", () => {
+  test("renders skillful 2 front-matter overrides before agent field filtering", () => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    writeFileSync(join(root, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example\n---\n");
+    const skill = join(root, "vendor", "angular-developer");
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(join(skill, "SKILL.md"), "---\nname: angular-developer\ndescription: Upstream\n---\n\nOriginal instructions.\n");
+    writeFileSync(join(root, "description.txt"), "Angular guidance");
+    writeFileSync(join(root, "skill.mod"), `skillful 2
+use path:./vendor { angular-developer }
+agents pi claude
+angular-developer.description.append on pi = " Pi only."
+angular-developer.description = ./description.txt
+angular-developer.description.append = " Not for other frontends."
+angular-developer.when_to_use = "On Angular projects"
+`);
+    expect(run(root, "fmt").exitCode).toBe(0);
+    const result = run(root, "render");
+    expect(result.exitCode, output(result).stderr).toBe(0);
+    const rendered = (agent: string) => readFileSync(join(root, "rendered", agent, "skills", "angular-developer", "SKILL.md"), "utf8");
+    expect(rendered("pi")).toContain("description: Angular guidance Not for other frontends. Pi only.\n");
+    expect(rendered("claude")).toContain("description: Angular guidance Not for other frontends.\n");
+    expect(rendered("claude")).toContain("when_to_use: On Angular projects");
+    expect(rendered("pi")).not.toContain("when_to_use");
+    expect(rendered("pi")).toEndWith("\n\nOriginal instructions.\n");
+    expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toContain("description: Upstream");
+  });
+
+  test("check reports drift only for replaced upstream fields, including after updating", () => {
+    const root = temp();
+    expect(run(root, "init").exitCode).toBe(0);
+    const skill = join(root, "skills", "example", "SKILL.md");
+    const upstream = (description: string, license: string) => writeFileSync(skill, `---\nname: example\ndescription: ${description}\nlicense: ${license}\n---\n\nBody.\n`);
+    upstream("Original", "MIT");
+    writeFileSync(join(root, "skill.mod"), `skillful 2
+agents pi claude
+example.description on pi = "Local wording"
+example.license.append = " (see LICENSE)"
+`);
+    expect(run(root, "update").exitCode).toBe(0);
+    upstream("Original", "Apache-2.0");
+    expect(output(run(root, "check")).stdout).toBe("OK\n");
+    upstream("Changed", "Apache-2.0");
+    expect(run(root, "update").exitCode).toBe(0);
+    const result = run(root, "check", "--strict", "--format", "json");
+    expect(result.exitCode, output(result).stderr).toBe(1);
+    expect(JSON.parse(output(result).stdout).warnings).toEqual([
+      expect.objectContaining({ harness: "pi", skill: "example", message: expect.stringContaining("example.description") }),
+    ]);
+  });
   test("root help orients humans and agents without a Nix story", () => {
     const result = run(temp(), "--help");
     const { stdout } = output(result);
@@ -413,7 +463,7 @@ machine personal skip foreign example
     ["use path:./commands { example }", "unknown skill example in use"],
     ['skip missing on pi "reason"', "unknown skill missing in skip"],
     ["machine laptop skip missing", "unknown skill missing in machine laptop"],
-    ['missing.description = "value"', "unknown skill missing in description override"],
+    ['missing.description = "value"', "unknown skill missing in front-matter override"],
   ])("skillful 2 reports the line for %s", (directive, message) => {
     const root = temp();
     expect(run(root, "init").exitCode).toBe(0);

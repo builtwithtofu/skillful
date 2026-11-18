@@ -92,7 +92,7 @@ let
             rev = builtins.elemAt fields 2;
             narHash = builtins.elemAt fields 3;
           };
-        entries = lib.imap0 parse lines;
+        entries = lib.imap0 parse (builtins.filter (line: !(lib.hasPrefix "@override " line)) lines);
         names = map (entry: entry.name) entries;
       in
       if lib.hasInfix "<<<<<<<" text || lib.hasInfix "=======" text || lib.hasInfix ">>>>>>>" text

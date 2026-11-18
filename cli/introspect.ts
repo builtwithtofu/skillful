@@ -104,6 +104,9 @@ export function checkCommand(project: Project, names: string[], options: Resolve
   const warnings: Array<{ code: string; harness: HarnessId; skill?: string; message: string }> = [];
   for (const id of ids) {
     const harness = harnessPlan(plan, id);
+    const delivered = new Set(harness.skills.map((skill) => skill.name));
+    const changed = new Map(plan.changedOverrides.filter(({ skill, agent }) => (!agent || agent === id) && delivered.has(skill) && (!selected || selected.has(skill))).map((item) => [`${item.skill}.${item.field}`, item]));
+    for (const [field, { skill }] of changed) warnings.push({ code: "override-drift", harness: id, skill, message: `upstream changed ${field} since it was overridden` });
     for (const skill of harness.skills) if ((!selected || selected.has(skill.name)) && !skill.body.trim()) warnings.push({ code: "empty-skill", harness: id, skill: skill.name, message: "rendered skill body is empty" });
     for (const command of harness.commands) if (!command.body.trim()) warnings.push({ code: "empty-command", harness: id, message: `${command.name} renders empty` });
   }

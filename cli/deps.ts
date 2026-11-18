@@ -3,7 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { cacheKey, narHash } from "./nar.ts";
-import { readLock, pinFor, validateLock, writeLockAtomic, type LockEntry } from "./lock.ts";
+import { readLock, readOverrideBaselines, pinFor, validateLock, writeLockAtomic, type LockEntry } from "./lock.ts";
 import { formatMod, type Require, type SkillMod } from "./mod.ts";
 import { isInside, type Project } from "./project.ts";
 
@@ -147,9 +147,8 @@ function effectiveRoot(project: Project, requirement: Require, wholeTree: string
   if (parsed.type === "path" && !isInside(project.sourceRoot, real)) fail(`path dependency ${requirement.name} escapes the source root`, `Choose a path inside ${project.sourceRoot}.`);
   return real;
 }
-export function cachedDependencyPaths(project: Project, overrides: Record<string, string> = {}, explicitCache?: string) {
-  const needsLock = project.mod.requires.some((requirement) => !requirement.ref.startsWith("path:"));
-  const entries = validateLock(project.mod, readLock(project.root, needsLock));
+export function cachedDependencyPaths(project: Project, overrides: Record<string, string> = {}, explicitCache?: string, entries = readLock(project.root, project.mod.requires.some((requirement) => !requirement.ref.startsWith("path:")))) {
+  validateLock(project.mod, entries);
   const result: Record<string, string> = { ...overrides };
   for (const requirement of project.mod.requires) {
     if (result[requirement.name]) continue;
@@ -275,6 +274,14 @@ export async function updateDependencies(project: Project, names: string[], cach
   for (const requirement of new Set(selected)) refreshed.push(await resolveAndFetch(lockName(project.mod, requirement, existing), requirement.ref, cache));
   const selectedSet = new Set(refreshed.map((entry) => entry.name));
   const next = [...(selectedNames.length === 0 ? [] : existing.filter((entry) => !selectedSet.has(entry.name))), ...refreshed];
-  writeLockAtomic(project.root, next);
+  if (project.mod.version === 2 && selectedNames.length === 0) {
+    const baselines = new Map<string, string>();
+    if (project.mod.fieldOverrides.some((item) => item.operation === "set")) {
+      const { replacementFields } = await import("./contract.ts");
+      const paths = cachedDependencyPaths(project, {}, cache, next);
+      for (const { key, hash } of replacementFields(project, paths, readOverrideBaselines(project.root))) baselines.set(key, hash);
+    }
+    writeLockAtomic(project.root, next, baselines);
+  } else writeLockAtomic(project.root, next);
   return next;
 }

@@ -47,6 +47,7 @@ Afterward:
 export const FMT_AFTER_HELP = `
 Use --check in CI or before a review. Omit it to rewrite skill.mod in place.
 Both skillful 1 and skillful 2 keep their existing version.
+See skillful skills show mod for skillful 2 front-matter overrides.
 
 Examples:
   skillful fmt --check
@@ -166,6 +167,8 @@ Examples:
 
 export const CHECK_AFTER_HELP = `
 Read-only. --strict promotes warnings to failure.
+Warns when an upstream front-matter field replaced in skill.mod differs from
+its baseline in skill.lock. Run skillful update to record new baselines.
 
 Examples:
   skillful check
