@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { installProject, pathConflict } from "./install.ts";
+import { installProject, installSetup, pathConflict } from "./install.ts";
+import { resolveSetup } from "./setup.ts";
 import { discoverProject } from "./project.ts";
 import { parse } from "yaml";
 import { copyBasicFixture } from "./test-fixture.ts";
@@ -68,6 +69,27 @@ describe("safe installation", () => {
     expect(existsSync(join(otherHome, "AGENTS.md"))).toBe(true);
   });
 
+  test("installs Antigravity skills and commands under Gemini config even alongside shared readers", () => {
+    const { project, home, state } = fixture();
+    writeFileSync(join(project, "skill.mod"), "skillful 2\nagents antigravity codex pi\nmachine local\n");
+    writeFileSync(join(project, "rules", "global_agents.md"), "# Shared rules\n");
+    writeFileSync(join(project, "skills", "example", "SKILL.md"), [
+      "---", "name: example", "description: Example skill", "license: MIT", "---",
+      "<!-- only antigravity -->", "Antigravity only.", "<!-- end -->",
+      "<!-- skip antigravity -->", "Other agents only.", "<!-- end -->", "",
+    ].join("\n"));
+    const resolved = discoverProject({ project });
+    installSetup(resolved, resolveSetup(resolved, "local"), { root: home, stateHome: state });
+
+    const skills = join(home, ".gemini", "config", "skills");
+    const skill = readFileSync(join(skills, "example", "SKILL.md"), "utf8");
+    expect(parse(skill.split("---")[1]!)).toEqual({ name: "example", description: "Example skill" });
+    expect(skill).toContain("Antigravity only.");
+    expect(skill).not.toContain("Other agents only.");
+    expect(existsSync(join(skills, "hidden", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(skills, "standalone", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".gemini", "AGENTS.md"))).toBe(true);
+  });
   test("installs Grok skills, commands, and rules", () => {
     const { project, home, state } = fixture();
     installProject(discoverProject({ project }), { harness: "grok", root: home, stateHome: state });

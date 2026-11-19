@@ -35,7 +35,17 @@ differ or are skipped, go into the receiving agents' own folders. Claude Code
 always uses `.claude/skills`. Skillful 1 setups keep their existing harness paths.
 
 Codex, Cursor, Grok, and OpenCode project profiles do not claim `AGENTS.md`.
-Assign `rules AGENTS.md` explicitly to one harness when the project needs it.
+Assign `rules AGENTS.md` explicitly to one harness when the project needs it,
+unless the setup lists `antigravity`.
+
+Antigravity installs home skills to `~/.gemini/config/skills` and rules to
+`~/.gemini/AGENTS.md`. Its project profile already claims `.agents/skills` and
+`AGENTS.md`, so do not assign `rules AGENTS.md` to another harness in that
+setup. A skillful 1 `root project` setup cannot hold both `antigravity` and
+`codex`, because both put project skills in `.agents/skills` and `install`
+refuses "overlapping destinations". List only one of them; both read what it
+installs in `.agents/skills`.
+
 Only skillful 1 supports one-off `install --harness`. It uses home paths, with
 `--root` as relocation.
 

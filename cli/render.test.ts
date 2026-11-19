@@ -174,7 +174,7 @@ describe("TypeScript renderer", () => {
 
   test.each([
     ["<!-- only -->", 5, "empty selector list", "Add at least one agent"],
-    ["<!-- skip unknown -->", 5, 'unknown agent "unknown"', "Use one of: claude"],
+    ["<!-- skip unknown -->", 5, 'unknown agent "unknown"', "Use one of: antigravity"],
     ["<!-- only model:example -->", 5, 'selector kind "model" is not supported yet', "Use agent names"],
     ["<!-- only version:2 -->", 5, 'selector kind "version" is not supported yet', "Use agent names"],
     ["<!-- only codex -->\n<!-- skip pi -->", 6, "nested renderer fences", "Close the current fence with <!-- end -->"],
