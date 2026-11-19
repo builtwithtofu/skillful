@@ -1,0 +1,11 @@
+{
+  "name": "antigravity",
+  "installPaths": {
+    "home": { "skills": ".gemini/config/skills", "rules": ".gemini/AGENTS.md" },
+    "project": { "skills": ".agents/skills", "rules": "AGENTS.md" }
+  },
+  "argSyntax": "the user's request that invoked this skill",
+  "skillFrontmatter": ["name", "description"],
+  "commandFrontmatter": ["description"],
+  "commandMerge": "skill"
+}

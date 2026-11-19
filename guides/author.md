@@ -15,6 +15,10 @@ invoke. A command needs no `SKILL.md`; a skill folder cannot hold a `COMMAND.md`
 command cannot share a skill's name. Codex and Cursor require Agent Skill names for
 skills and commands: at most 64 lowercase letters, numbers, and single hyphens.
 
+On Antigravity, a command becomes an ordinary skill, so the model may load it
+when its description matches, not only when the person runs it. In Antigravity's CLI
+(`agy`), each skill is also a slash command.
+
 `$@` is the argument placeholder; the renderer translates it per harness. Markup in
 code spans and fenced code blocks is shown as written. A render error names the file
 and line and tells you how to fix it. For an overridden body, the error names the

@@ -247,7 +247,7 @@ let
         // lib.optionalAttrs (name == "codex") { skills = ".codex/skills"; }
         // lib.optionalAttrs (name == "claude") { rules = ".claude/CLAUDE.md"; }
         // (global.paths or { }) // (local.paths or { });
-      readsShared = (builtin != null && name != "claude") || (global.readsShared or false) || (local.readsShared or false);
+      readsShared = (builtin != null && name != "antigravity" && name != "claude") || (global.readsShared or false) || (local.readsShared or false);
     };
 in
 {

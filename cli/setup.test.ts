@@ -66,6 +66,17 @@ setup local (
     ]);
     expect(Object.keys(setup.files).some((path) => path.endsWith("AGENTS.md"))).toBe(false);
   });
+
+  test("installs Antigravity into the project's Agent Skills and rules paths", () => {
+    const project = projectWith("setup local (\n  root project\n  antigravity\n)");
+    writeFileSync(join(project.root, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example skill\n---\nExample body.\n");
+    installSetup(project, resolveSetup(project, "local"), { stateHome: join(project.root, "state") });
+
+    expect(existsSync(join(project.root, ".agents", "skills", "example", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(project.root, ".agents", "skills", "standalone", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(project.root, "AGENTS.md"))).toBe(true);
+    expect(existsSync(join(project.root, ".gemini"))).toBe(false);
+  });
   test("installs every setup harness and converges a changed harness list", () => {
     const project = projectWith(declarations);
     const home = join(project.root, "home");

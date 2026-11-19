@@ -1,3 +1,4 @@
+import antigravity from "../harnesses/antigravity.json";
 import claude from "../harnesses/claude.json";
 import codex from "../harnesses/codex.json";
 import cursor from "../harnesses/cursor.json";
@@ -21,6 +22,7 @@ export type HarnessFacts = {
 export class HarnessError extends Error { constructor(message: string, readonly recovery = `Choose one of: ${HARNESS_IDS.join(", ")}.`) { super(message); } }
 
 const EMBEDDED_FACTS: ReadonlyArray<readonly [string, unknown]> = [
+  ["antigravity.json", antigravity],
   ["claude.json", claude],
   ["codex.json", codex],
   ["cursor.json", cursor],

@@ -2,8 +2,8 @@
 
 **Pin, compose and override agent skills across every coding agent and machine you use.**
 
-Skillful is a skills manager for people who run several coding agents (Claude
-Code, Codex, Cursor, Grok, OpenCode, Pi) on more than one machine. One file
+Skillful is a skills manager for people who run several coding agents (Antigravity,
+Claude Code, Codex, Cursor, Grok, OpenCode, Pi) on more than one machine. One file
 says where your skills come from, which agents get them and what each machine
 selects. Skillful locks other people's skills to an exact revision, applies
 your changes without a fork, and writes each agent's native layout.
@@ -99,7 +99,7 @@ skillful 2
 local ./skills ./commands
 rules ./rules/global_agents.md
 
-agents claude codex cursor grok opencode pi
+agents antigravity claude codex cursor grok opencode pi
 
 machine example
 ```

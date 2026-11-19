@@ -26,7 +26,7 @@ describe("standalone executable", () => {
     expect(readFileSync(join(project, "skill.mod"), "utf8")).toStartWith("skillful 2\n");
     const listed = run("list", "harnesses", "--project", project);
     expect(listed.exitCode).toBe(0);
-    expect(new TextDecoder().decode(listed.stdout)).toBe("claude\ncodex\ncursor\ngrok\nopencode\npi\n");
+    expect(new TextDecoder().decode(listed.stdout)).toBe("antigravity\nclaude\ncodex\ncursor\ngrok\nopencode\npi\n");
     expect(run("render", "--project", project, "--out", rendered).exitCode).toBe(0);
     expect(existsSync(join(rendered, ".agents", "skills", "example", "SKILL.md"))).toBe(true);
 

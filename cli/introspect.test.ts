@@ -26,7 +26,7 @@ describe("top-level introspection", () => {
 
     const listedHarnesses = run(project, "list", "harnesses");
     expect(listedHarnesses.exitCode).toBe(0);
-    expect(stdout(listedHarnesses)).toBe("claude\ncodex\ncursor\ngrok\nopencode\npi\n");
+    expect(stdout(listedHarnesses)).toBe("antigravity\nclaude\ncodex\ncursor\ngrok\nopencode\npi\n");
 
     const inspected = run(project, "inspect", "example", "--harness", "pi", "--rendered", "--format", "json");
     expect(inspected.exitCode).toBe(0);
@@ -65,7 +65,7 @@ rules ./rules/global_agents.md
 
     const listedHarnesses = run(project, "list", "harnesses");
     expect(listedHarnesses.exitCode).toBe(0);
-    expect(stdout(listedHarnesses)).toBe("claude\ncodex\ncursor\ngrok\nopencode\npi\n");
+    expect(stdout(listedHarnesses)).toBe("antigravity\nclaude\ncodex\ncursor\ngrok\nopencode\npi\n");
     const codex = json(run(project, "list", "harnesses", "--format", "json")).harnesses.find((harness: { name: string }) => harness.name === "codex");
     expect(codex.profile.installPaths.project.skills).toBe(".agents/skills");
     expect(codex.profile.exclusions).toBeUndefined();

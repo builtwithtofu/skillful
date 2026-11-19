@@ -1,6 +1,6 @@
 import { posix } from "node:path";
 
-export const HARNESS_IDS = ["claude", "codex", "cursor", "grok", "opencode", "pi"] as const;
+export const HARNESS_IDS = ["antigravity", "claude", "codex", "cursor", "grok", "opencode", "pi"] as const;
 export type BuiltinHarnessId = (typeof HARNESS_IDS)[number];
 export type HarnessId = string;
 export function mapHarnesses<T>(value: (id: BuiltinHarnessId) => T): Record<BuiltinHarnessId, T> {
@@ -68,7 +68,7 @@ type SkillMod2 = SkillModBase & {
 export type SkillMod = (SkillModBase & { version: 1 }) | SkillMod2;
 
 export function agentReadsShared(mod: SkillMod, id: HarnessId, setup?: Setup | null) {
-  return ((HARNESS_IDS as readonly string[]).includes(id) && id !== "claude") || (mod.version === 2 &&
+  return ((HARNESS_IDS as readonly string[]).includes(id) && id !== "antigravity" && id !== "claude") || (mod.version === 2 &&
     [...mod.declarations, ...(setup?.declarations ?? [])].some((entry) => entry.id === id && entry.readsShared));
 }
 
